@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prompt API Conformance</title>
+  <style>
+    :root { --bg:#fff; --fg:#1b1e24; --muted:#5f6672; --line:#e2e5ea; --ok:#2b8a3e; --bad:#c92a2a; --accent:#3b5bdb; color-scheme: light dark; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#17191d; --fg:#e7e9ee; --muted:#9aa1ad; --line:#2c3038; --ok:#69db7c; --bad:#ff8787; --accent:#748ffc; } }
+    body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
+    main { max-width: 860px; margin: 0 auto; padding: 32px 16px; }
+    h1 { margin: 0 0 4px; font-size: 24px; }
+    .muted { color: var(--muted); }
+    button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+    button:disabled { opacity: .5; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    td.detail { color: var(--muted); word-break: break-word; }
+    .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+    code { font-family: ui-monospace, monospace; font-size: 13px; }
+    .wrap { overflow-x: auto; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Prompt API conformance</h1>
+  <p class="muted">Runs the same checks against whatever provides <code>window.LanguageModel</code> on this page: Chrome's native model or the Local LLM extension. Enable this site in the extension first.</p>
+  <p id="source">Detecting…</p>
+  <button id="run" disabled>Run checks</button>
+  <div class="wrap"><table><thead><tr><th>Check</th><th>Result</th><th>Detail</th><th>ms</th></tr></thead><tbody id="rows"></tbody></table></div>
+</main>
+<script type="module">
+  import { runChecks } from "./conformance.js";
+  const source = document.getElementById("source");
+  const btn = document.getElementById("run");
+  const rows = document.getElementById("rows");
+
+  async function detect() {
+    if (!("LanguageModel" in window)) {
+      source.textContent = "No LanguageModel on this page. Install the extension and enable this site, or use a Chrome build with the Prompt API.";
+      return;
+    }
+    if (window.localLLM) {
+      const info = await window.localLLM.info().catch(() => null);
+      source.textContent = `Provider: Local LLM extension ${info ? `— ${info.name} on ${info.backend} (v${info.version})` : ""}`;
+    } else {
+      source.textContent = "Provider: Chrome native Prompt API";
+    }
+    btn.disabled = false;
+  }
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    rows.replaceChildren();
+    await runChecks(window.LanguageModel, (r) => {
+      const tr = document.createElement("tr");
+      for (const [text, cls] of [[r.name], [r.ok ? "pass" : "fail", r.ok ? "ok" : "bad"], [r.detail, "detail"], [String(r.ms)]]) {
+        const td = document.createElement("td");
+        td.textContent = text;
+        if (cls) td.className = cls;
+        tr.append(td);
+      }
+      rows.append(tr);
+    });
+    btn.disabled = false;
+  };
+
+  if ("LanguageModel" in window) detect();
+  else { window.addEventListener("localllm:ready", detect, { once: true }); setTimeout(detect, 600); }
+</script>
+</body>
+</html>

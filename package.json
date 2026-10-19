@@ -1,0 +1,33 @@
+{
+  "name": "local-llm-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MV3 Chrome extension exposing a local or user-keyed cloud LLM to approved sites via a Prompt API-compatible window.LanguageModel",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:test": "node scripts/build.mjs --test",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "node scripts/build.mjs --test && playwright test",
+    "fetch:webllm-libs": "node scripts/fetch-webllm-libs.mjs",
+    "demo": "http-server demo -p 8787 -c-1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/chrome": "^0.3.5",
+    "esbuild": "^0.28.2",
+    "http-server": "^14.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.1",
+    "@mlc-ai/web-llm": "^0.2.86",
+    "@wllama/wllama": "^3.8.1"
+  }
+}

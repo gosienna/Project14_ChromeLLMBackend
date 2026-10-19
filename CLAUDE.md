@@ -1,0 +1,34 @@
+# CLAUDE.md
+
+MV3 Chrome extension exposing a local or user-keyed cloud LLM to user-approved sites through a Prompt API–compatible `window.LanguageModel`. The plan is `docs/BUILD_PLAN.md`; progress against it is `docs/STATUS.md` — update STATUS when you finish a plan item.
+
+## Commands
+
+- `npm run typecheck` — TypeScript, no emit
+- `npm test` — Vitest unit tests (`test/`, `packages/*/test/`)
+- `npm run build` / `npm run build:test` — esbuild to `dist/` / `dist-test/`
+- `npm run test:e2e` — builds `dist-test/` and runs Playwright (`e2e/`) against the unpacked extension. Uses the echo engine, so no model downloads. Run it after touching the polyfill, bridge, router or host.
+- `npm run fetch:webllm-libs` — downloads WebLLM model `.wasm` libraries into `vendor/webllm-libs/` (gitignored, bundled by the build)
+
+`.npmrc` sets `ignore-scripts=true` because `onnxruntime-node` (a transitive dep of Transformers.js we never use) downloads binaries on install.
+
+## Layout
+
+- `src/polyfill/` — MAIN-world stub defining `LanguageModel` and `window.localLLM`. No model, no extension APIs. Built twice (`polyfill.js`, `polyfill-override.js`) via the `__OVERRIDE_NATIVE__` define.
+- `src/bridge/` — ISOLATED-world relay. MessageChannel handshake + nonce with the stub, schema validation, forwards over a `chrome.runtime` port.
+- `src/background/` — service worker. `router.ts` is the trust boundary; `policy.ts` (consent gate) and `limits.ts` (rate limits, spend caps) are pure and unit-tested; `registration.ts` registers content scripts only for enabled, permitted origins; `host-link.ts` manages the offscreen document.
+- `src/offscreen/` — the host: sessions, FIFO generation queue, `LocalRuntime` (one loaded model, idle unload), engines in `engines/`, cloud adapters in `adapters/`. Every backend implements `Backend` in `backend.ts`.
+- `src/shared/` — protocol + validators, host protocol, settings/storage schema, catalog, providers, keystore, errors.
+- `src/ui/` — options, popup, consent dialog (vanilla TS + `dom.ts` helper).
+- `packages/web/` — `@local-llm/web` detection/fallback helper.
+- `demo/` — public conformance page.
+
+## Rules that matter
+
+- Trust only `port.sender.origin` in the router. Never read an origin, backend, model or key from a page message. `parsePageRequest` rejects unknown kinds and extra fields — keep it strict when adding fields.
+- Pages get model output only. Keys never leave `chrome.storage.local` except to the offscreen host for a provider call; never log prompts or keys (usage log holds origin, time, backend, token counts).
+- Offscreen documents only have `chrome.runtime` messaging (no `storage`, `getManifest`, `tabs`…). Anything the host needs comes from the router in the request.
+- New sites default to the local backend only. Never fall back to cloud unless the user allowed it for that site.
+- Errors crossing to the page use Prompt API `DOMException` names (`LLMError` in `shared/errors.ts`).
+- No required host permissions and no new required permissions in updates (store policy). All code, including engine `.wasm`, is bundled; only weights download at runtime. Build output stays unminified.
+- If a native `LanguageModel` exists, the stub leaves it alone unless "override native" is on.

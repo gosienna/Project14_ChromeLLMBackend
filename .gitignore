@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-test/
+test-results/
+playwright-report/
+vendor/webllm-libs/
+*.log
+.DS_Store
