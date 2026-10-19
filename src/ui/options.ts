@@ -1,7 +1,7 @@
 // Options page: sites, local models, cloud providers and keys, limits, usage log.
 
 import { estimateCost } from "../background/limits";
-import { CATALOG, canRun, findModel, type EngineId } from "../shared/catalog";
+import { CATALOG, autoSelectEngine, canRun, findModel, type EngineId } from "../shared/catalog";
 import type { HostStatus } from "../shared/host-protocol";
 import { deleteKey, disableLock, enableLock, keystoreStatus, lock, setKey, unlock } from "../shared/keystore";
 import { BUILTIN_PROVIDERS, customProvider } from "../shared/providers";
@@ -120,6 +120,15 @@ async function sitesSection(): Promise<HTMLElement> {
 
 // ---- Local model ------------------------------------------------------------
 
+const ENGINE_ORDER: EngineId[] = ["webllm", "transformers", "wllama", "nano", "dummy"];
+const ENGINE_LABELS: Record<EngineId, string> = {
+  webllm: "WebLLM (WebGPU)",
+  transformers: "Transformers.js (WebGPU or WASM)",
+  wllama: "wllama (CPU, GGUF)",
+  nano: "Chrome built-in",
+  dummy: "Echo (test)",
+};
+
 async function localSection(): Promise<HTMLElement> {
   const status = await send<HostStatus>({ type: "admin", admin: { op: "status" } }).catch(() => null);
   const caps = status?.caps ?? { webgpu: false, maxBufferMB: 0 };
@@ -131,12 +140,19 @@ async function localSection(): Promise<HTMLElement> {
     onchange: async (e) => { await save((s) => (s.local.modelId = (e.target as HTMLSelectElement).value)); render(); },
   }, ...CATALOG.map((m) => h("option", { value: m.id, selected: m.id === model.id }, `${m.name}${m.sizeMB ? ` · ~${m.sizeMB} MB` : ""}`)));
 
-  const engines: Array<EngineId | "auto"> = ["auto", "transformers", "webllm", "wllama", "nano", "dummy"];
+  // List every engine the model has a build for; ones this device can't run stay visible but disabled.
+  const downloaded = status?.downloaded ?? [];
+  const engineLabel = (e: EngineId) => `${ENGINE_LABELS[e]}${downloaded.includes(`${e}:${model.id}`) ? " · downloaded" : ""}`;
+  const auto = autoSelectEngine(model, caps);
+  const engines = ENGINE_ORDER.filter((e) => canRun(model, e, { webgpu: true, maxBufferMB: Infinity }));
   const engineSel = h("select", {
     onchange: async (e) => { await save((s) => (s.local.enginePin[model.id] = (e.target as HTMLSelectElement).value as EngineId)); render(); },
-  }, ...engines
-    .filter((e) => e === "auto" || canRun(model, e, caps))
-    .map((e) => h("option", { value: e, selected: e === pin }, e === "auto" ? "Auto-select" : e)));
+  },
+    h("option", { value: "auto", selected: pin === "auto" }, `Auto-select → ${auto ? engineLabel(auto) : "none available"}`),
+    ...engines.map((e) => {
+      const ok = canRun(model, e, caps);
+      return h("option", { value: e, selected: e === pin, disabled: !ok }, ok ? engineLabel(e) : `${ENGINE_LABELS[e]} — needs WebGPU`);
+    }));
 
   const bar = h("progress", { max: 1, value: 0, hidden: true });
   const msg = h("span", { class: "small muted" });
@@ -163,7 +179,7 @@ async function localSection(): Promise<HTMLElement> {
     const m = findModel(id);
     return h("tr", {},
       h("td", {}, m?.name ?? id),
-      h("td", {}, engine),
+      h("td", {}, ENGINE_LABELS[engine as EngineId] ?? engine),
       h("td", {}, m?.sizeMB ? `~${m.sizeMB} MB` : "—"),
       h("td", {}, m ? h("button", { class: "danger", onclick: async () => { await send({ type: "admin", admin: { op: "deleteModel", model: m } }); render(); } }, "Delete") : null),
     );
@@ -176,9 +192,9 @@ async function localSection(): Promise<HTMLElement> {
 
   return section("local", "Local model",
     h("p", { class: "small muted" },
-      `WebGPU: ${caps.webgpu ? `yes (max buffer ${caps.maxBufferMB} MB)` : "no — CPU (wllama) only"} · `,
+      `WebGPU: ${caps.webgpu ? `yes (max buffer ${caps.maxBufferMB} MB)` : "no — WebLLM unavailable; Transformers.js runs on WASM, wllama on CPU"} · `,
       `cross-origin isolated: ${status?.crossOriginIsolated ? "yes (multi-threaded WASM)" : "no"} · `,
-      `loaded: ${status?.loaded ? `${status.loaded.modelId} on ${status.loaded.engine}` : "none"}`),
+      `loaded: ${status?.loaded ? `${status.loaded.modelId} on ${ENGINE_LABELS[status.loaded.engine]}` : "none"}`),
     h("div", { class: "row" }, h("label", {}, "Model ", modelSel), h("label", {}, "Engine ", engineSel)),
     h("div", { class: "row", style: "margin-top:10px" },
       h("button", { class: "primary", onclick: download }, "Download / load"),
