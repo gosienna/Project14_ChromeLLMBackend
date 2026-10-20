@@ -46,6 +46,7 @@ interface Pending {
 
 let port: chrome.runtime.Port | null = null;
 const pending = new Map<string, Pending>();
+const orphaned: string[] = [];
 
 function connect(): chrome.runtime.Port {
   if (port) return port;
@@ -76,13 +77,17 @@ function connect(): chrome.runtime.Port {
     }
   });
   p.onDisconnect.addListener(() => {
-    // The router releases this port's sessions when it goes away.
+    // The router releases this port's sessions when it goes away, unless the worker itself
+    // stopped; then the host still holds the session, so destroy it on the next connect.
     port = null;
+    if (session) orphaned.push(session.sessionId);
     session = null;
     for (const w of pending.values()) w.reject(Object.assign(new Error("The extension restarted; the conversation was reset"), { name: "OperationError" }));
     pending.clear();
   });
-  return (port = p);
+  port = p;
+  for (const sessionId of orphaned.splice(0)) send({ kind: "destroy", sessionId });
+  return p;
 }
 
 function request<T>(req: DistributiveOmit<PageRequest, "id">, handlers: Omit<Pending, "resolve" | "reject"> = {}): { id: string; promise: Promise<T> } {

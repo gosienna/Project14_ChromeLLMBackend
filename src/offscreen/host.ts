@@ -17,6 +17,7 @@ interface Session {
   id: string;
   origin: string;
   owner: string;
+  tabId: number;
   backendId: string;
   backend: Backend;
   history: ChatMessage[];
@@ -184,7 +185,6 @@ async function handle(req: HostRequest): Promise<void> {
       } finally {
         running.delete(rid);
       }
-      if (controller.signal.aborted) throw new LLMError("AbortError", "Aborted");
       const p = backend.params();
       const history = r.options.initialPrompts ?? [];
       const tools = r.options.tools?.length ? r.options.tools : undefined;
@@ -192,6 +192,7 @@ async function handle(req: HostRequest): Promise<void> {
         id: randomId(),
         origin: req.origin,
         owner: req.owner,
+        tabId: req.tabId,
         backendId: picked.id,
         backend: tools ? withTools(backend) : backend,
         history,
@@ -204,6 +205,8 @@ async function handle(req: HostRequest): Promise<void> {
         chain: Promise.resolve(),
       };
       if (s.usage > s.quota) throw new LLMError("QuotaExceededError", "Initial prompts exceed the context window");
+      // Aborted, or the page went away (releaseOwner) while the model loaded.
+      if (controller.signal.aborted) throw new LLMError("AbortError", "Aborted");
       sessions.set(s.id, s);
       sessionsChanged();
       return respond(rid, { kind: "result", value: info(s) }, { sessionBackend: s.backendId });
@@ -347,9 +350,19 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
     case "webSearch":
       return tavilySearch(op.apiKey, op.query, op.maxResults);
     case "releaseOwner":
+      // Request ids are `${owner}.${id}`: also cancels a create still loading the model.
+      for (const [rid, c] of running) if (rid.startsWith(`${op.owner}.`)) c.abort();
       for (const s of [...sessions.values()]) if (s.owner === op.owner) destroySession(s);
       sessionsChanged();
       return null;
+    case "releaseTabs": {
+      // Covers pages whose port closed while the service worker was stopped.
+      const closed = new Set(op.closed);
+      const open = op.open && new Set(op.open);
+      for (const s of [...sessions.values()]) if (closed.has(s.tabId) || (open && !open.has(s.tabId))) destroySession(s);
+      sessionsChanged();
+      return null;
+    }
   }
 }
 

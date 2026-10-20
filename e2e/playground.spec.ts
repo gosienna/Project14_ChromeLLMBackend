@@ -123,3 +123,29 @@ test("replies render Markdown and LaTeX, with a plain-text option", async ({ con
   await expect(answer).toContainText("# Title");
   await expect(answer).toContainText("$$\\frac{a}{b}$$");
 });
+
+test("sessions are released when the worker stopped before the playground closed", async ({ context, sw }) => {
+  const extId = new URL(sw.url()).host;
+  const origin = `chrome-extension://${extId}`;
+  const count = () => sw.evaluate(async (o) => ((await (globalThis as any).__test.admin({ op: "status" })).sessions[o] ?? 0), origin);
+  const page = await context.newPage();
+  await page.goto(`${origin}/ui/playground.html`);
+  const message = page.getByLabel("Message");
+  const replies = page.locator(".pg-assistant .pg-text");
+  await message.fill("hi");
+  await message.press("Enter");
+  await expect(replies.nth(0)).toHaveText("Echo #1: hi");
+  expect(await count()).toBe(1);
+
+  // The playground resets its chat; the stale session goes on the next connect.
+  await sw.evaluate(() => (globalThis as any).__test.dropPorts());
+  await message.fill("again");
+  await message.press("Enter");
+  await expect(replies.nth(1)).toContainText("again");
+  await expect.poll(count).toBe(1);
+
+  // Closing the tab while the router has no port for it.
+  await sw.evaluate(() => (globalThis as any).__test.dropPorts());
+  await page.close();
+  await expect.poll(count).toBe(0);
+});

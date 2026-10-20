@@ -60,6 +60,10 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - Tool results capped (3 000 chars local, 8 000 cloud); changing tools mid-chat continues in a new session with the transcript
 - Tests: trace sanitizer/adapter tracing/error trace, registry seeding/validation/reset, registry tools, schema form round trip, payload validation; E2E raw view, edited request, custom tool in sandbox with Run/Deny, registry tool, browser tools on a test page. Not yet verified: web_search against Tavily, download/console tools, real models choosing these tools
 
+## Fixes
+
+- Toolbar badge stuck at a session count after closing pages: sessions whose page closed while the service worker was stopped were never released (the host outlives the worker). The host now records each session's tab and drops sessions on `tabs.onRemoved` and, at worker start, for tabs that no longer exist; the playground destroys its pre-restart session on reconnect; a create that finishes after its page left is discarded. E2E covers it with a simulated worker stop. Remaining gap: a web page that navigates away (same tab) after a worker stop keeps its session until the tab closes
+
 ## Not started / v2
 
 - Structured output (`responseConstraint`), model hints, embeddings

@@ -30,7 +30,7 @@ import {
   type UsageEntry,
 } from "../shared/settings";
 import { askConsent, clearOnceGrants, getConsentRequest, hasOnceGrant, onWindowClosed, settle, type Decision } from "./consent";
-import { hostReady, onHostDisconnect, onHostMessage, sendToHost } from "./host-link";
+import { hostExists, hostReady, onHostDisconnect, onHostMessage, sendToHost } from "./host-link";
 import { TokenRateLimiter, providerTokensThisMonth, siteTokensToday } from "./limits";
 import { consentAvailability, deliversTo, gate } from "./policy";
 import { isPermitted, syncRegistrations } from "./registration";
@@ -168,6 +168,7 @@ const hostBase = (conn: PageConn, settings: Settings) => ({
   type: "req" as const,
   origin: conn.origin,
   owner: conn.key,
+  tabId: conn.tabId,
   limits: { maxSessions: settings.limits.maxSessions, maxContext: settings.limits.maxContext, maxOutputTokens: settings.limits.maxOutputTokens },
   idleUnloadMinutes: settings.idleUnloadMinutes,
 });
@@ -451,7 +452,21 @@ async function webSearch(args: { query?: unknown; max_results?: unknown }) {
 chrome.runtime.onInstalled.addListener(() => void syncRegistrations());
 chrome.runtime.onStartup.addListener(() => void syncRegistrations());
 chrome.windows.onRemoved.addListener((id) => onWindowClosed(id));
-chrome.tabs.onRemoved.addListener((tabId) => void clearOnceGrants((_, t) => t === tabId));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void clearOnceGrants((_, t) => t === tabId);
+  hostExists()
+    .then((up) => (up ? sendToHost({ type: "admin", rid: `tab-${tabId}`, admin: { op: "releaseTabs", closed: [tabId] } }) : undefined))
+    .catch(() => {});
+});
+
+// A page closed while the worker was stopped never reported it; drop sessions of tabs that are gone.
+hostExists()
+  .then(async (up) => {
+    if (!up) return;
+    const open = (await chrome.tabs.query({})).flatMap((t) => (t.id === undefined ? [] : [t.id]));
+    await sendToHost({ type: "admin", rid: `tabs-${bootId}`, admin: { op: "releaseTabs", open } });
+  })
+  .catch(() => {});
 
 chrome.permissions.onRemoved.addListener(async ({ origins = [] }) => {
   const removed = new Set(origins);
@@ -478,5 +493,10 @@ if (__TEST__) {
     revokeSite: (origin: string) => revokeSite(origin, false),
     getUsage,
     admin,
+    /** Like a worker stop: pages see their ports close, and the router never releases them. */
+    dropPorts() {
+      for (const c of conns.values()) c.port.disconnect();
+      conns.clear();
+    },
   };
 }

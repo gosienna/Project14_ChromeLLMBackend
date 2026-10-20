@@ -16,6 +16,8 @@ export interface HostRequest {
   origin: string;
   /** Router-scoped page connection; its sessions are released when the page goes away. */
   owner: string;
+  /** Tab the page lives in; its sessions are also released when the tab closes. */
+  tabId: number;
   req: PageRequest;
   /**
    * For create/availability/params/info: the backend to use, then any fallbacks the user
@@ -45,6 +47,8 @@ export type AdminOp =
   | { op: "unload" }
   | { op: "revokeOrigin"; origin: string }
   | { op: "releaseOwner"; owner: string }
+  /** Release sessions of closed tabs: those in `closed`, or every tab not in `open`. */
+  | { op: "releaseTabs"; closed?: number[]; open?: number[] }
   /** The playground's web_search tool. The router adds the key; the page never sees it. */
   | { op: "webSearch"; apiKey: string; query: string; maxResults: number };
 

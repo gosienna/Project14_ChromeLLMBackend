@@ -25,7 +25,7 @@ export function hostReady() {
   readyWaiter = null;
 }
 
-async function hostExists(): Promise<boolean> {
+export async function hostExists(): Promise<boolean> {
   const contexts = await chrome.runtime.getContexts({
     contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
     documentUrls: [chrome.runtime.getURL(HOST_URL)],
