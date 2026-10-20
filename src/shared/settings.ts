@@ -46,6 +46,8 @@ export interface UsageEntry {
   origin: string;
   time: number;
   backend: BackendId;
+  /** Cloud model id, for the cost estimate. */
+  model?: string;
   inputTokens: number;
   outputTokens: number;
 }
@@ -77,9 +79,24 @@ export async function getSettings(area: Area = local()): Promise<Settings> {
     ...DEFAULT_SETTINGS,
     ...s,
     local: { ...DEFAULT_SETTINGS.local, ...s.local },
-    providers: { ...DEFAULT_SETTINGS.providers, ...s.providers },
+    providers: migrateModels({ ...DEFAULT_SETTINGS.providers, ...s.providers }),
     limits: { ...DEFAULT_SETTINGS.limits, ...s.limits },
   };
+}
+
+/** Former default model ids the providers no longer serve, mapped to their replacements. */
+const RETIRED_MODELS: Record<string, Record<string, string>> = {
+  xai: { "grok-3-mini": "grok-4.3" },
+  deepseek: { "deepseek-chat": "deepseek-flash", "deepseek-reasoner": "deepseek-flash" },
+};
+
+function migrateModels(providers: Settings["providers"]): Settings["providers"] {
+  for (const [id, renames] of Object.entries(RETIRED_MODELS)) {
+    const cfg = providers[id];
+    const next = cfg && renames[cfg.model];
+    if (next) providers[id] = { ...cfg, model: next };
+  }
+  return providers;
 }
 
 export async function saveSettings(settings: Settings, area: Area = local()): Promise<void> {

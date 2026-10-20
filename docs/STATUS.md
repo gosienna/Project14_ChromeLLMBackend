@@ -33,6 +33,7 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - `AnthropicAdapter`, `GeminiAdapter`, `OpenAICompatAdapter` (OpenAI, xAI, DeepSeek, OpenRouter, custom base URLs) with SSE parsing, error mapping to `DOMException` names, token usage
 - Keys in `chrome.storage.local`, optional passphrase lock (PBKDF2 → AES-GCM, unlocked key in `chrome.storage.session`)
 - Provider host permissions requested when enabled; per-site allowed backends; fallback only when allowed for the site
+- Curated model list per provider (`shared/cloud-models.ts`, prices as of 2026-10-20): options model picker and per-provider Models tables (input → output, context, reasoning, tools, list price); `CloudBackend` takes context window, image input and tool mode from it (unlisted ids keep 128K / images / native); usage log records the cloud model and prices it; retired default ids (`grok-3-mini`, `deepseek-chat`, `deepseek-reasoner`) migrate on load. Reasoning is informational: adapters don't send thinking/effort parameters yet
 - Not yet verified against live provider APIs.
 
 ## Playground — done (echo engine); image input unit-tested per adapter

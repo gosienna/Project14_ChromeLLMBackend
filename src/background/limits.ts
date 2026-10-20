@@ -1,5 +1,7 @@
 // Per-origin rate limiting and spend caps. Pure logic, unit-tested without chrome APIs.
 
+import { cloudCost } from "../shared/cloud-models";
+import { BUILTIN_PROVIDERS } from "../shared/providers";
 import type { UsageEntry } from "../shared/settings";
 
 const MINUTE = 60_000;
@@ -60,18 +62,12 @@ export function providerTokensThisMonth(usage: UsageEntry[], backend: string, no
   return usage.filter((e) => e.backend === backend && e.time >= since).reduce((s, e) => s + total(e), 0);
 }
 
-/** Rough cost estimate in USD per million tokens (input, output) for the usage log. */
-export const PRICE_HINTS: Record<string, [number, number]> = {
-  anthropic: [1, 5],
-  openai: [0.15, 0.6],
-  gemini: [0.3, 2.5],
-  xai: [0.3, 0.5],
-  deepseek: [0.27, 1.1],
-  openrouter: [1, 3],
-};
-
+/**
+ * Rough USD cost for the usage log at the model's base list price (cloud-models.ts). Entries
+ * logged before the model was recorded are priced as the provider's default model; local,
+ * custom endpoints and unlisted models count as 0.
+ */
 export function estimateCost(e: UsageEntry): number {
-  const p = PRICE_HINTS[e.backend];
-  if (!p) return 0;
-  return (e.inputTokens * p[0] + e.outputTokens * p[1]) / 1_000_000;
+  const fallback = BUILTIN_PROVIDERS.find((p) => p.id === e.backend)?.defaultModel;
+  return cloudCost(e.backend, e.model ?? fallback, e.inputTokens, e.outputTokens) ?? 0;
 }

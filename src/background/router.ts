@@ -315,8 +315,8 @@ onHostMessage((msg: FromHost) => {
     case "res": {
       const f = inFlight.get(msg.rid);
       if (msg.usage) {
-        const { origin, backendId, inputTokens, outputTokens } = msg.usage;
-        appendUsage({ origin, backend: backendId, time: Date.now(), inputTokens, outputTokens }).catch(() => {});
+        const { origin, backendId, model, inputTokens, outputTokens } = msg.usage;
+        appendUsage({ origin, backend: backendId, ...(model ? { model } : {}), time: Date.now(), inputTokens, outputTokens }).catch(() => {});
         // Correct the estimate recorded before the request with actual output.
         limiter.record(origin, outputTokens);
       }

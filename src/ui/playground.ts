@@ -4,6 +4,7 @@
 // consent here since this is extension UI, but keys still never reach this page.
 
 import { findModel } from "../shared/catalog";
+import { findCloudModel } from "../shared/cloud-models";
 import {
   IMAGE_MIME_TYPES,
   MAX_IMAGE_BASE64,
@@ -187,7 +188,8 @@ async function loadBackends() {
   const options: Array<[string, string]> = [["local", `Local · ${model?.name ?? settings.local.modelId}`]];
   for (const p of allProviders(settings)) {
     const cfg = settings.providers[p.id];
-    if (cfg?.enabled) options.push([p.id, `${p.name} · ${cfg.model || p.defaultModel}`]);
+    const id = cfg?.model || p.defaultModel;
+    if (cfg?.enabled) options.push([p.id, `${p.name} · ${findCloudModel(p.id, id)?.name ?? id}`]);
   }
   let saved: string | null = null;
   try {

@@ -33,7 +33,7 @@ export interface HostResponse {
   rid: string;
   res: PageResponse;
   /** Reported with the final message of a generation. */
-  usage?: Usage & { origin: string; backendId: string };
+  usage?: Usage & { origin: string; backendId: string; model?: string };
   /** Backend chosen for a session created or cloned by this request. */
   sessionBackend?: string;
 }

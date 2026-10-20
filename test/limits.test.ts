@@ -26,6 +26,6 @@ describe("spend caps", () => {
   it("counts this month's tokens per provider", () => expect(providerTokensThisMonth(usage, "openai", now)).toBe(152));
   it("estimates cost for cloud only", () => {
     expect(estimateCost(usage[0])).toBe(0);
-    expect(estimateCost({ ...usage[1], inputTokens: 1_000_000, outputTokens: 0 })).toBeCloseTo(0.15);
+    expect(estimateCost({ ...usage[1], inputTokens: 1_000_000, outputTokens: 0 })).toBeCloseTo(0.1);
   });
 });

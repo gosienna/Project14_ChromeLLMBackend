@@ -2,6 +2,7 @@
 
 import { estimateCost } from "../background/limits";
 import { ALL_CAPS, CATALOG, autoSelectEngine, canRun, findModel, ioLabel, toolMode, whyNot, type CatalogModel, type EngineId } from "../shared/catalog";
+import { PRICES_AS_OF, cloudIoLabel, cloudModels, fmtTokens, priceLabel, priceNotes, type CloudModel } from "../shared/cloud-models";
 import type { HostStatus } from "../shared/host-protocol";
 import { deleteKey, disableLock, enableLock, keystoreStatus, lock, setKey, unlock } from "../shared/keystore";
 import { BUILTIN_PROVIDERS, customProvider } from "../shared/providers";
@@ -250,6 +251,58 @@ async function localSection(): Promise<HTMLElement> {
 
 // ---- Cloud providers ----------------------------------------------------------
 
+type ProviderConfig = Settings["providers"][string];
+const CUSTOM_MODEL = "__custom";
+
+const cloudModelLabel = (m: CloudModel) =>
+  `${m.name} · ${cloudIoLabel(m)} · ${m.tools === "native" ? "tools" : "prompted tools"}${m.reasoning ? " · reasoning" : ""} · ${priceLabel(m)}`;
+
+/** Curated models grouped Current / Legacy, plus a free-text id; custom endpoints get the text box only. */
+function modelPicker(providerId: string, cfg: ProviderConfig): HTMLElement {
+  const setModel = (model: string) => save((s) => (s.providers[providerId] = { ...(s.providers[providerId] ?? cfg), model }));
+  const text = h("input", { value: cfg.model, size: 20, placeholder: "model id", onchange: (e) => setModel((e.target as HTMLInputElement).value.trim()) });
+  const models = cloudModels(providerId);
+  if (!models.length) return text;
+  const known = models.some((m) => m.id === cfg.model);
+  text.hidden = known;
+  const group = (label: string, list: CloudModel[]) =>
+    h("optgroup", { label }, ...list.map((m) => h("option", { value: m.id, selected: m.id === cfg.model }, cloudModelLabel(m))));
+  const sel = h("select", {
+    style: "max-width:280px",
+    onchange: async (e) => {
+      const value = (e.target as HTMLSelectElement).value;
+      if (value === CUSTOM_MODEL) {
+        text.hidden = false;
+        text.focus();
+        return;
+      }
+      await setModel(value);
+      render();
+    },
+  },
+    group("Current", models.filter((m) => !m.legacy)),
+    group("Legacy", models.filter((m) => m.legacy)),
+    h("option", { value: CUSTOM_MODEL, selected: !known }, "Custom model ID…"));
+  return h("div", { class: "stack" }, sel, text);
+}
+
+function modelTable(providerId: string, name: string, cfg: ProviderConfig | undefined): HTMLElement {
+  const rows = cloudModels(providerId).map((m) => h("tr", {},
+    h("td", {}, m.id === cfg?.model ? h("strong", {}, m.name) : m.name, m.legacy ? h("span", { class: "muted" }, " (legacy)") : null, h("div", {}, h("code", {}, m.id))),
+    h("td", {}, cloudIoLabel(m)),
+    h("td", {}, fmtTokens(m.contextWindow), m.maxOutput ? h("div", { class: "small muted" }, `${fmtTokens(m.maxOutput)} out`) : null),
+    h("td", {}, m.reasoning ?? "—"),
+    h("td", {}, m.tools),
+    h("td", { style: "white-space:nowrap" }, priceLabel(m)),
+    h("td", { class: "small muted" }, priceNotes(m)),
+  ));
+  return h("details", { open: !!cfg?.enabled, style: "margin-top:8px" },
+    h("summary", {}, `${name} — ${rows.length} models`),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ...["Model", "Input → output", "Context", "Reasoning", "Tools", "$ in / out", "Notes"].map((t) => h("th", {}, t)))),
+      h("tbody", {}, ...rows))));
+}
+
 async function cloudSection(): Promise<HTMLElement> {
   const ks = await keystoreStatus();
   const rows = allProviders(settings).map((p) => {
@@ -270,10 +323,7 @@ async function cloudSection(): Promise<HTMLElement> {
           await save((s) => (s.providers[p.id] = { ...cfg, enabled: box.checked }));
         },
       })),
-      h("td", {}, h("input", {
-        value: cfg.model, size: 20,
-        onchange: (e) => save((s) => (s.providers[p.id] = { ...cfg, model: (e.target as HTMLInputElement).value.trim() })),
-      })),
+      h("td", {}, modelPicker(p.id, cfg)),
       h("td", {}, h("div", { class: "row" }, keyInput,
         h("button", { disabled: !ks.unlocked, onclick: async () => { if (!keyInput.value) return; await setKey(p.id, keyInput.value.trim()); keyInput.value = ""; toast(msg, "Saved"); render(); } }, "Save"),
         ks.providers.includes(p.id) ? h("button", { class: "danger", onclick: async () => { await deleteKey(p.id); render(); } }, "Delete") : null,
@@ -312,8 +362,14 @@ async function cloudSection(): Promise<HTMLElement> {
   return section("cloud", "Cloud providers",
     h("p", { class: "small muted" }, "Your own API keys, stored only in this browser and never shared with websites. A site uses a cloud provider only if you allow it for that site."),
     h("div", { class: "table-wrap" }, h("table", {},
-      h("thead", {}, h("tr", {}, ...["Provider", "Enabled", "Default model", "API key", "Monthly token cap", ""].map((t) => h("th", {}, t)))),
+      h("thead", {}, h("tr", {}, ...["Provider", "Enabled", "Model", "API key", "Monthly token cap", ""].map((t) => h("th", {}, t)))),
       h("tbody", {}, ...rows))),
+    h("h2", { style: "margin-top:16px" }, "Models"),
+    h("p", { class: "small muted" },
+      `List prices in USD per million input / output tokens, standard tier, as of ${PRICES_AS_OF}; check the provider's pricing page before relying on them. `,
+      "Tools: native uses the provider's tool calling; prompted describes tools in the prompt (OpenAI's newest models can't call tools over Chat Completions). ",
+      "Reasoning: hybrid models can skip thinking, the others always think. Any other model id can be entered under Custom."),
+    ...BUILTIN_PROVIDERS.map((p) => modelTable(p.id, p.name, settings.providers[p.id])),
     h("h2", { style: "margin-top:16px" }, "Add an OpenAI-compatible endpoint"),
     h("div", { class: "row" }, name, url, model, h("button", { onclick: addCustom }, "Add"), msg),
     await lockPanel(ks),

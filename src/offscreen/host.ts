@@ -268,7 +268,7 @@ async function handle(req: HostRequest): Promise<void> {
         }
         s.history = working;
         s.usage = used;
-        respond(rid, { kind: "done", inputUsage: s.usage }, { usage: { ...usage, origin: s.origin, backendId: s.backendId } });
+        respond(rid, { kind: "done", inputUsage: s.usage }, { usage: { ...usage, origin: s.origin, backendId: s.backendId, ...(s.backend.kind === "cloud" ? { model: s.backend.describe().name } : {}) } });
       };
       const p = s.chain.then(run, run);
       s.chain = p.catch(() => {});

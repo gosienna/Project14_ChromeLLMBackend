@@ -15,10 +15,10 @@ export interface ProviderDef {
 
 export const BUILTIN_PROVIDERS: ProviderDef[] = [
   { id: "anthropic", name: "Anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com/v1", defaultModel: "claude-haiku-5-5", hostPattern: "https://api.anthropic.com/*", keyRequired: true },
-  { id: "openai", name: "OpenAI", adapter: "openai-compat", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini", hostPattern: "https://api.openai.com/*", keyRequired: true },
-  { id: "gemini", name: "Google Gemini", adapter: "gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", defaultModel: "gemini-2.5-flash", hostPattern: "https://generativelanguage.googleapis.com/*", keyRequired: true },
-  { id: "xai", name: "xAI Grok", adapter: "openai-compat", baseUrl: "https://api.x.ai/v1", defaultModel: "grok-3-mini", hostPattern: "https://api.x.ai/*", keyRequired: true },
-  { id: "deepseek", name: "DeepSeek", adapter: "openai-compat", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-chat", hostPattern: "https://api.deepseek.com/*", keyRequired: true },
+  { id: "openai", name: "OpenAI", adapter: "openai-compat", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-6-luna", hostPattern: "https://api.openai.com/*", keyRequired: true },
+  { id: "gemini", name: "Google Gemini", adapter: "gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", defaultModel: "gemini-3.8-flash", hostPattern: "https://generativelanguage.googleapis.com/*", keyRequired: true },
+  { id: "xai", name: "xAI Grok", adapter: "openai-compat", baseUrl: "https://api.x.ai/v1", defaultModel: "grok-4.3", hostPattern: "https://api.x.ai/*", keyRequired: true },
+  { id: "deepseek", name: "DeepSeek", adapter: "openai-compat", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-flash", hostPattern: "https://api.deepseek.com/*", keyRequired: true },
   { id: "openrouter", name: "OpenRouter", adapter: "openai-compat", baseUrl: "https://openrouter.ai/api/v1", defaultModel: "openrouter/auto", hostPattern: "https://openrouter.ai/*", keyRequired: true },
 ];
 

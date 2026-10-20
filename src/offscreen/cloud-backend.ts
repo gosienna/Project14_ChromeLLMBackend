@@ -1,6 +1,7 @@
 // Cloud backend: same Backend contract as local engines, using the user's own API key.
 
 import type { BackendSpec } from "../shared/host-protocol";
+import { findCloudModel, takesCloudImages, type CloudModel } from "../shared/cloud-models";
 import { estimateMessageTokens, type ChatMessage, type ModelParams } from "../shared/protocol";
 import type { AdapterKind } from "../shared/providers";
 import { anthropicAdapter } from "./adapters/anthropic";
@@ -16,14 +17,17 @@ const ADAPTERS: Record<AdapterKind, Adapter> = {
   "openai-compat": openAICompatAdapter,
 };
 
+/** For model ids outside the curated list (custom endpoints, ids the user typed). */
 const CLOUD_CONTEXT = 128_000;
 
 export class CloudBackend implements Backend {
   readonly kind = "cloud" as const;
   readonly id: string;
+  private info?: CloudModel;
 
   constructor(private spec: Extract<BackendSpec, { kind: "cloud" }>) {
     this.id = spec.provider.id;
+    this.info = findCloudModel(spec.provider.id, spec.model);
   }
 
   describe() {
@@ -37,15 +41,15 @@ export class CloudBackend implements Backend {
   async prepare() {}
 
   contextWindow() {
-    return CLOUD_CONTEXT;
+    return this.info?.contextWindow ?? CLOUD_CONTEXT;
   }
 
   acceptsImages() {
-    return true;
+    return this.info ? takesCloudImages(this.info) : true;
   }
 
   toolMode() {
-    return "native" as const;
+    return this.info?.tools ?? "native";
   }
 
   params(): ModelParams {
