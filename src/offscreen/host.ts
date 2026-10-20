@@ -66,14 +66,16 @@ setInterval(() => {
   if (busy > 0 || runtime.downloadingKey) post({ type: "keepalive" });
 }, 20_000);
 
-function makeBackend(spec: BackendSpec, idleMinutes: number): Backend {
-  return spec.kind === "local" ? new LocalBackend(runtime, spec.model, spec.engine, idleMinutes, spec.reasoning) : new CloudBackend(spec);
+function makeBackend(spec: BackendSpec, req: HostRequest): Backend {
+  return spec.kind === "local"
+    ? new LocalBackend(runtime, spec.model, spec.engine, req.idleUnloadMinutes, req.limits.maxContext, spec.reasoning)
+    : new CloudBackend(spec);
 }
 
 async function pickBackend(req: HostRequest): Promise<{ id: string; backend: Backend } | null> {
   await capsReady;
   for (const { id, spec } of req.backends ?? []) {
-    const backend = makeBackend(spec, req.idleUnloadMinutes);
+    const backend = makeBackend(spec, req);
     if ((await backend.availability()) !== "unavailable") return { id, backend };
   }
   return null;
@@ -240,7 +242,7 @@ async function handle(req: HostRequest): Promise<void> {
             {
               temperature: s.temperature,
               topK: s.topK,
-              maxTokens: Math.max(16, s.quota - tokens),
+              maxTokens: Math.min(req.limits.maxOutputTokens, Math.max(16, s.quota - tokens)),
               onReasoning: (text) => respond(rid, { kind: "reasoning", text }),
               tools: offered,
               ...(req.trace ? { onTrace: (t) => respond(rid, { kind: "trace", round, trace: sanitizeTrace(t) as typeof t }) } : {}),
@@ -326,7 +328,7 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
     case "download":
       busy++;
       try {
-        await runtime.ensure(op.model, op.engine, (loaded) => post({ type: "admin-progress", rid, loaded }));
+        await runtime.ensure(op.model, op.engine, op.maxContext, (loaded) => post({ type: "admin-progress", rid, loaded }));
         runtime.touch(10);
       } finally {
         busy--;

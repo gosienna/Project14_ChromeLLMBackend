@@ -168,7 +168,7 @@ const hostBase = (conn: PageConn, settings: Settings) => ({
   type: "req" as const,
   origin: conn.origin,
   owner: conn.key,
-  limits: { maxSessions: settings.limits.maxSessions, maxContext: settings.limits.maxContext },
+  limits: { maxSessions: settings.limits.maxSessions, maxContext: settings.limits.maxContext, maxOutputTokens: settings.limits.maxOutputTokens },
   idleUnloadMinutes: settings.idleUnloadMinutes,
 });
 

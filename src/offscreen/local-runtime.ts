@@ -1,7 +1,7 @@
 // Local model lifecycle in the offscreen host: capability probe, engine auto-selection, lazy
 // load, one loaded model at a time, FIFO generation queue and idle unload.
 
-import { ALL_CAPS, autoSelectEngine, canRun, takesImages, toolMode, type CatalogModel, type DeviceCaps, type EngineId } from "../shared/catalog";
+import { ALL_CAPS, autoSelectEngine, canRun, contextLimit, takesImages, toolMode, type CatalogModel, type DeviceCaps, type EngineId } from "../shared/catalog";
 import type { Availability, ChatMessage, ModelParams } from "../shared/protocol";
 import { DEFAULT_PARAMS, type Backend, type GenerateOptions, type GenerateResult } from "./backend";
 import { DummyEngine } from "./engines/dummy";
@@ -46,8 +46,8 @@ function supportsMem64(): boolean {
 
 export class LocalRuntime {
   caps: DeviceCaps = { webgpu: false, maxBufferMB: 0, jspi: false, mem64: false };
-  private current: { model: CatalogModel; engine: LocalEngine } | null = null;
-  private loading: { key: string; promise: Promise<LocalEngine>; listeners: Set<(f: number) => void> } | null = null;
+  private current: { model: CatalogModel; engine: LocalEngine; nCtx: number } | null = null;
+  private loading: { key: string; nCtx: number; promise: Promise<LocalEngine>; listeners: Set<(f: number) => void> } | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private active = 0;
@@ -112,13 +112,24 @@ export class LocalRuntime {
     return "downloadable";
   }
 
-  /** Load (downloading if needed) the model, unloading any other one first. */
-  async ensure(model: CatalogModel, pin: EngineId | "auto", onProgress?: (f: number) => void): Promise<LocalEngine> {
+  /** Context a load would allocate: the user's limit, capped to what the model and build allow. */
+  contextSize(model: CatalogModel, pin: EngineId | "auto", maxContext: number): number {
+    const engine = this.resolveEngine(model, pin);
+    return Math.min(maxContext, engine ? contextLimit(model, engine) : model.contextWindow);
+  }
+
+  /**
+   * Load (downloading if needed) the model with a `maxContext`-token context, unloading any other
+   * one first. A loaded model with a different context is reloaded: the KV cache is sized at load.
+   */
+  async ensure(model: CatalogModel, pin: EngineId | "auto", maxContext: number, onProgress?: (f: number) => void): Promise<LocalEngine> {
     const engineId = this.resolveEngine(model, pin);
     if (!engineId) throw new DOMException(`${model.name} cannot run on this device`, "NotSupportedError");
     const key = `${engineId}:${model.id}`;
-    if (this.current && this.current.model.id === model.id && this.current.engine.id === engineId) return this.current.engine;
-    if (this.loading?.key === key) {
+    const nCtx = this.contextSize(model, pin, maxContext);
+    const c = this.current;
+    if (c && c.model.id === model.id && c.engine.id === engineId && c.nCtx === nCtx) return c.engine;
+    if (this.loading?.key === key && this.loading.nCtx === nCtx) {
       if (onProgress) this.loading.listeners.add(onProgress);
       return this.loading.promise;
     }
@@ -129,12 +140,12 @@ export class LocalRuntime {
       // engine's in-flight generation fails and the page gets an error.
       await this.unload();
       const engine = await createEngine(engineId);
-      await engine.load(model, this.caps, (f) => listeners.forEach((l) => l(f)));
-      this.current = { model, engine };
+      await engine.load(model, this.caps, (f) => listeners.forEach((l) => l(f)), nCtx);
+      this.current = { model, engine, nCtx };
       this.setDownloaded(key, true);
       return engine;
     })();
-    this.loading = { key, promise, listeners };
+    this.loading = { key, nCtx, promise, listeners };
     try {
       return await promise;
     } finally {
@@ -194,6 +205,8 @@ export class LocalBackend implements Backend {
     readonly model: CatalogModel,
     private pin: EngineId | "auto",
     private idleMinutes: number,
+    /** The user's "Max context tokens"; the model loads with this, capped to its own limit. */
+    private maxContext: number,
     /** Let reasoning models think; off asks them to skip or shorten it. */
     private reasoning = true,
   ) {}
@@ -207,12 +220,12 @@ export class LocalBackend implements Backend {
   }
 
   async prepare(onProgress?: (f: number) => void) {
-    await this.runtime.ensure(this.model, this.pin, onProgress);
+    await this.runtime.ensure(this.model, this.pin, this.maxContext, onProgress);
     this.runtime.touch(this.idleMinutes);
   }
 
   contextWindow() {
-    return this.model.contextWindow;
+    return this.runtime.contextSize(this.model, this.pin, this.maxContext);
   }
 
   acceptsImages() {
@@ -230,7 +243,7 @@ export class LocalBackend implements Backend {
   }
 
   async countTokens(messages: ChatMessage[]) {
-    const engine = await this.runtime.ensure(this.model, this.pin);
+    const engine = await this.runtime.ensure(this.model, this.pin, this.maxContext);
     return engine.countTokens(messages);
   }
 
@@ -238,9 +251,10 @@ export class LocalBackend implements Backend {
     const runtime = this.runtime;
     const model = this.model;
     const pin = this.pin;
+    const maxContext = this.maxContext;
     const withReasoning = { ...opts, reasoning: this.reasoning };
     return runtime.exclusive(async function* () {
-      const engine = await runtime.ensure(model, pin);
+      const engine = await runtime.ensure(model, pin, maxContext);
       // Engines report their request; the wrapper adds the response for the playground's raw view.
       return yield* withResponseTrace(withReasoning, (o) => engine.generate(messages, o, signal));
     }, this.idleMinutes);

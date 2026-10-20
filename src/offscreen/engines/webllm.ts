@@ -14,7 +14,7 @@ type WebLLM = typeof import("@mlc-ai/web-llm");
 let libPromise: Promise<WebLLM> | null = null;
 const loadLibrary = () => (libPromise ??= import("@mlc-ai/web-llm"));
 
-function appConfig(model: CatalogModel) {
+function appConfig(model: CatalogModel, nCtx?: number) {
   const mlc = model.mlc!;
   return {
     // Weights go to IndexedDB (WebLLM's own "webllm/*" databases) rather than Cache Storage.
@@ -24,7 +24,7 @@ function appConfig(model: CatalogModel) {
         model: mlc.weightsUrl,
         model_id: mlc.modelId,
         model_lib: vendorUrl(`webllm-libs/${mlc.lib}`),
-        overrides: { context_window_size: model.contextWindow },
+        ...(nCtx ? { overrides: { context_window_size: nCtx } } : {}),
       },
     ],
   };
@@ -48,12 +48,12 @@ export class WebLLMEngine implements LocalEngine {
   private engine: any = null;
   private model: CatalogModel | null = null;
 
-  async load(model: CatalogModel, caps: DeviceCaps, onProgress: (f: number) => void) {
+  async load(model: CatalogModel, caps: DeviceCaps, onProgress: (f: number) => void, nCtx: number) {
     if (!model.mlc) throw new Error(`${model.name} has no MLC build`);
     if (!caps.webgpu) throw new Error("WebLLM requires WebGPU");
     const webllm = await loadLibrary();
     this.engine = await webllm.CreateMLCEngine(model.mlc.modelId, {
-      appConfig: appConfig(model),
+      appConfig: appConfig(model, nCtx),
       initProgressCallback: (r: { progress: number }) => onProgress(Math.min(1, r.progress)),
     });
     this.model = model;

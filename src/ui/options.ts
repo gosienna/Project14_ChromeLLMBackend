@@ -195,7 +195,7 @@ async function localSection(): Promise<HTMLElement> {
     };
     chrome.runtime.onMessage.addListener(listener);
     try {
-      await send({ type: "admin", admin: { op: "download", model, engine: pin } });
+      await send({ type: "admin", admin: { op: "download", model, engine: pin, maxContext: settings.limits.maxContext } });
       toast(msg, "Model ready");
     } catch (e) {
       toast(msg, String((e as Error).message));
@@ -383,7 +383,8 @@ function limitsSection(): HTMLElement {
     h("div", { class: "row" },
       num("Concurrent sessions per site", settings.limits.maxSessions, (s, v) => (s.limits.maxSessions = v)),
       num("Tokens per minute per site", settings.limits.tokensPerMinute, (s, v) => (s.limits.tokensPerMinute = v)),
-      num("Max context tokens", settings.limits.maxContext, (s, v) => (s.limits.maxContext = v))),
+      num("Max context tokens", settings.limits.maxContext, (s, v) => (s.limits.maxContext = v)),
+      num("Max output tokens", settings.limits.maxOutputTokens, (s, v) => (s.limits.maxOutputTokens = v))),
     h("div", { class: "row", style: "margin-top:12px" }, h("label", {}, h("input", {
       type: "checkbox", checked: settings.overrideNative,
       onchange: (e) => save((s) => (s.overrideNative = (e.target as HTMLInputElement).checked)),

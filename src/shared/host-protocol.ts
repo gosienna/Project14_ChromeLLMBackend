@@ -22,7 +22,7 @@ export interface HostRequest {
    * allowed for this site, in order. The host uses the first one that is available.
    */
   backends?: Array<{ id: string; spec: BackendSpec }>;
-  limits: { maxSessions: number; maxContext: number };
+  limits: { maxSessions: number; maxContext: number; maxOutputTokens: number };
   idleUnloadMinutes: number;
   /** Set only for the extension's playground: report raw request/response traces. */
   trace?: boolean;
@@ -40,7 +40,7 @@ export interface HostResponse {
 
 export type AdminOp =
   | { op: "status" }
-  | { op: "download"; model: CatalogModel; engine: EngineId | "auto" }
+  | { op: "download"; model: CatalogModel; engine: EngineId | "auto"; maxContext: number }
   | { op: "deleteModel"; model: CatalogModel }
   | { op: "unload" }
   | { op: "revokeOrigin"; origin: string }

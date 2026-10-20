@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ALL_CAPS, CATALOG, WLLAMA_HEAP_MAX_MB, autoSelectEngine, canRun, findModel, ioLabel, takesImages, toolMode, whyNot, type DeviceCaps, type EngineId } from "../src/shared/catalog";
+import { ALL_CAPS, CATALOG, WLLAMA_HEAP_MAX_MB, autoSelectEngine, canRun, contextLimit, findModel, ioLabel, takesImages, toolMode, whyNot, type DeviceCaps, type EngineId } from "../src/shared/catalog";
 import { hostPatternFor } from "../src/shared/providers";
 import { normalizeOrigin } from "../src/shared/settings";
 import { AsyncQueue } from "../src/shared/async-queue";
@@ -124,5 +124,15 @@ describe("capability labels", () => {
     expect(toolMode(g, "webllm")).toBe("prompted");
     expect(toolMode(findModel("mixtral-8x7b-instruct-q5")!, "wllama")).toBe("prompted"); // template has no tools
     for (const m of CATALOG) if (m.tools) expect(m.gguf, m.id).toBeDefined();
+  });
+});
+
+describe("context limits", () => {
+  it("cap each engine at the model's maximum, or its WebLLM build's lower one", () => {
+    const g = findModel("gemma-4-e2b-it")!;
+    expect(contextLimit(g, "wllama")).toBe(131072);
+    expect(contextLimit(g, "webllm")).toBe(4096);
+    expect(contextLimit(findModel("qwen3-8b")!, "wllama")).toBe(40960);
+    for (const m of CATALOG) if (m.mlc?.contextWindow) expect(m.mlc.contextWindow, m.id).toBeLessThan(m.contextWindow);
   });
 });

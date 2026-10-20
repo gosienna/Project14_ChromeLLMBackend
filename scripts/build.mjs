@@ -6,7 +6,7 @@
 //   node scripts/build.mjs --watch
 
 import * as esbuild from "esbuild";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -83,6 +83,11 @@ function copyStatic() {
   cpSync(join(root, "src/offscreen/host.html"), join(out, "offscreen/host.html"));
   for (const page of ["options", "popup", "consent", "playground", "tool-sandbox"]) cpSync(join(root, `src/ui/${page}.html`), join(out, `ui/${page}.html`));
   cpSync(join(root, "src/ui/style.css"), join(out, "ui/style.css"));
+  // KaTeX for math in playground replies: its stylesheet (unminified) and the woff2 fonts it uses first.
+  const katex = join(root, "node_modules/katex/dist");
+  mkdirSync(join(out, "ui/katex/fonts"), { recursive: true });
+  cpSync(join(katex, "katex.css"), join(out, "ui/katex/katex.css"));
+  for (const f of readdirSync(join(katex, "fonts"))) if (f.endsWith(".woff2")) cpSync(join(katex, "fonts", f), join(out, "ui/katex/fonts", f));
 
   // Engine runtimes: served from the extension, never from a CDN.
   const nm = join(root, "node_modules");

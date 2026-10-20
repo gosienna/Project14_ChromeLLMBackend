@@ -78,17 +78,17 @@ export class WllamaEngine implements LocalEngine {
   private wllama: any = null;
   private model: CatalogModel | null = null;
 
-  async load(model: CatalogModel, caps: DeviceCaps, onProgress: (f: number) => void) {
+  async load(model: CatalogModel, caps: DeviceCaps, onProgress: (f: number) => void, nCtx: number) {
     if (!model.gguf) throw new Error(`${model.name} has no GGUF build`);
     try {
       try {
-        await this.open(model, caps, onProgress, true);
+        await this.open(model, caps, onProgress, nCtx, true);
       } catch (e) {
         // A partial or stale cache entry: drop every shard and download again once.
         if (!/Model file not found/i.test(String((e as Error)?.message ?? e))) throw e;
         await this.unload();
         await this.deleteCache(model);
-        await this.open(model, caps, onProgress, false);
+        await this.open(model, caps, onProgress, nCtx, false);
       }
     } catch (e) {
       await this.unload().catch(() => {});
@@ -104,16 +104,17 @@ export class WllamaEngine implements LocalEngine {
     onProgress(1);
   }
 
-  private async open(model: CatalogModel, caps: DeviceCaps, onProgress: (f: number) => void, useCache: boolean) {
+  private async open(model: CatalogModel, caps: DeviceCaps, onProgress: (f: number) => void, nCtx: number, useCache: boolean) {
     const { Wllama } = await loadLibrary();
     this.wllama = new Wllama(
       { default: vendorUrl("wllama/wllama.wasm") },
-      { suppressNativeLog: true, parallelDownloads: 4, allowOffline: true, cacheManager: await modelCache() },
+      // DEBUG(wllama-stall): native INFO logs (slot/KV/token counts, no prompt text) to the offscreen console.
+      { suppressNativeLog: false, parallelDownloads: 4, allowOffline: true, cacheManager: await modelCache() },
     );
     const { url, mmprojUrl } = model.gguf!;
     await this.wllama.loadModelFromUrl(mmprojUrl ? { url, mmprojUrl } : url, {
       useCache,
-      n_ctx: model.contextWindow,
+      n_ctx: nCtx,
       // Every layer on the GPU; 0 skips WebGPU initialisation entirely.
       n_gpu_layers: caps.webgpu ? 999 : 0,
       ...(mmprojUrl ? { mmproj_offload: caps.webgpu } : {}),
@@ -152,8 +153,20 @@ export class WllamaEngine implements LocalEngine {
     const stream = await this.wllama.createChatCompletion({ ...request, abortSignal: signal });
     const splitter = new ThinkSplitter();
     const calls = new ToolCallAccumulator();
+    // DEBUG(wllama-stall): counts only, never text.
+    const t0 = performance.now();
+    let nChunks = 0, nThink = 0, nAnswer = 0, lastAt = t0;
+    let lastFinish: unknown = null;
+    const beat = setInterval(() => console.info(`[wllama] +${((performance.now() - t0) / 1000).toFixed(0)}s chunks=${nChunks} think=${nThink} answer=${nAnswer} idle=${((performance.now() - lastAt) / 1000).toFixed(0)}s`), 10_000);
+    console.info(`[wllama] start msgs=${messages.length} estTokens=${usage.inputTokens} max_tokens=${request.max_tokens} tools=${opts.tools?.length ?? 0} temp=${opts.temperature} topK=${opts.topK} reasoning=${opts.reasoning}`);
     try {
       for await (const chunk of stream) {
+        nChunks++;
+        lastAt = performance.now();
+        const d = chunk.choices?.[0]?.delta;
+        if (d?.reasoning_content) nThink++;
+        if (d?.content) nAnswer++;
+        if (chunk.choices?.[0]?.finish_reason) lastFinish = chunk.choices[0].finish_reason;
         const delta = chunk.choices?.[0]?.delta as
           | { content?: string | null; reasoning_content?: string | null; tool_calls?: Parameters<ToolCallAccumulator["add"]>[0] }
           | undefined;
@@ -167,9 +180,13 @@ export class WllamaEngine implements LocalEngine {
         if (chunk.usage) usage = { inputTokens: chunk.usage.prompt_tokens, outputTokens: chunk.usage.completion_tokens };
       }
     } catch (e) {
+      console.info(`[wllama] threw after ${((performance.now() - t0) / 1000).toFixed(1)}s aborted=${signal.aborted}`, e);
       if (signal.aborted) throw abortError();
       throw e;
+    } finally {
+      clearInterval(beat);
     }
+    console.info(`[wllama] end ${((performance.now() - t0) / 1000).toFixed(1)}s chunks=${nChunks} think=${nThink} answer=${nAnswer} usage=${JSON.stringify(usage)} finish=${JSON.stringify(lastFinish)}`);
     if (signal.aborted) throw abortError();
     const rest = splitter.flush();
     if (rest.reasoning) opts.onReasoning?.(rest.reasoning);

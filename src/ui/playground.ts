@@ -22,6 +22,7 @@ import {
 } from "../shared/protocol";
 import { allProviders, getSettings } from "../shared/settings";
 import { h, send as uiSend } from "./dom";
+import { renderMarkdown } from "./markdown";
 import type { Payload } from "./playground/payload";
 import { PendingRaw, replyRaw, type TraceEntry } from "./playground/raw";
 import { ToolsPanel } from "./playground/tools-panel";
@@ -110,6 +111,7 @@ interface Attachment extends ImageInput {
 }
 
 const BACKEND_KEY = "playground.backend";
+const MARKDOWN_KEY = "playground.markdown";
 let backendId = "local";
 let session: SessionInfo | null = null;
 let acceptsImages = false;
@@ -129,6 +131,32 @@ let toolsStale = false;
 const backendSel = h("select", { "aria-label": "Backend", onchange: () => void switchBackend(backendSel.value) });
 const status = h("span", { class: "small muted" });
 const systemInput = h("textarea", { rows: 2, placeholder: "Optional system prompt", "aria-label": "System prompt", onchange: () => newChat() });
+/** Render replies as Markdown and math (on by default; remembered in this browser). */
+let renderMd = (() => {
+  try {
+    return localStorage.getItem(MARKDOWN_KEY) !== "off";
+  } catch {
+    return true;
+  }
+})();
+const markdownToggle = h("input", { type: "checkbox", checked: renderMd, onchange: () => {
+  renderMd = markdownToggle.checked;
+  try {
+    localStorage.setItem(MARKDOWN_KEY, renderMd ? "on" : "off");
+  } catch {
+    /* storage unavailable */
+  }
+  for (const el of log.querySelectorAll<HTMLElement>("[data-md]")) showAnswer(el, el.dataset.md ?? "");
+} });
+
+/** Show reply text: rendered Markdown and math, or plain text. The source stays in data-md. */
+function showAnswer(el: HTMLElement, text: string) {
+  el.dataset.md = text;
+  el.classList.toggle("pg-md", renderMd);
+  if (renderMd) el.innerHTML = renderMarkdown(text);
+  else el.textContent = text;
+}
+
 const tempInput = h("input", { type: "number", min: 0, max: 2, step: 0.1, placeholder: "default", "aria-label": "Temperature", onchange: () => newChat() });
 const log = h("div", { class: "pg-log", "aria-live": "polite" });
 const empty = h("p", { class: "pg-empty muted" }, "Send a message to start a conversation. Attach, paste or drop images to include them.");
@@ -264,10 +292,16 @@ function bubble(role: "user" | "assistant", ...children: Array<Node | string>): 
 
 /** Keep the transcript pinned to its end while the user is there (replies grow after they arrive). */
 let followLog = true;
+/** The log's size when last measured: scroll events that come with a size change are layout, not the user. */
+let logSize = "";
+const sizeOf = () => `${log.clientHeight}:${log.scrollHeight}`;
 const scrollLog = () => {
   if (followLog) log.scrollTop = log.scrollHeight;
+  logSize = sizeOf();
 };
 log.addEventListener("scroll", () => {
+  const size = sizeOf();
+  if (size !== logSize) return scrollLog();
   followLog = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
 });
 // Streaming text, tool cards, raw panels and collapsing details all change the content's height,
@@ -371,7 +405,12 @@ async function submit() {
     systemInput.value = system?.content ?? "";
     transcript = history;
     notice("Sent an edited request: the conversation below starts from it.");
-    for (const m of history) bubble(m.role as "user" | "assistant", h("div", { class: "pg-text" }, m.content));
+    for (const m of history) {
+      const el = h("div", { class: "pg-text" });
+      if (m.role === "assistant") showAnswer(el, m.content);
+      else el.textContent = m.content;
+      bubble(m.role as "user" | "assistant", el);
+    }
   } else if (toolsStale && session) {
     // Tools are fixed per session; continue the conversation in one with the new tools.
     dropSession();
@@ -392,6 +431,14 @@ async function submit() {
   let thought = "";
   // Created on the first reasoning chunk; collapsed so the answer stays in view.
   let thinking: { box: HTMLDetailsElement; text: HTMLElement } | null = null;
+  // Markdown is re-rendered at most once per frame while the reply streams.
+  let frame = 0;
+  const paint = () => {
+    frame ||= requestAnimationFrame(() => {
+      frame = 0;
+      showAnswer(out, answer);
+    });
+  };
   try {
     const s = await ensureSession((f) => (out.textContent = f < 1 ? `Loading model… ${Math.round(f * 100)}%` : "Loading model…"), edited ?? undefined);
     out.textContent = "";
@@ -400,7 +447,7 @@ async function submit() {
       {
         onChunk: (t) => {
           answer += t;
-          out.textContent = answer;
+          paint();
           if (thinking) thinking.box.querySelector("summary")!.textContent = "Thought";
         },
         onReasoning: (t) => {
@@ -426,6 +473,8 @@ async function submit() {
     else reply.append(h("div", { class: "warn small" }, `${err.name}: ${err.message}`));
     if (!answer) out.remove();
   } finally {
+    cancelAnimationFrame(frame);
+    if (answer) showAnswer(out, answer);
     generating = null;
     reply.classList.remove("pg-pending");
     setBusy(false);
@@ -569,6 +618,7 @@ async function main() {
         h("div", { class: "stack", style: "margin-top:8px" },
           systemInput,
           h("label", { class: "small" }, "Temperature ", tempInput),
+          h("label", { class: "small" }, markdownToggle, " Render Markdown and math in replies"),
           h("p", { class: "small muted" }, "Changing these starts a new chat. Conversations here are not tied to any website and are not saved."))),
       toolsBox),
     log,

@@ -49,7 +49,7 @@ export class CloudBackend implements Backend {
   }
 
   params(): ModelParams {
-    return { defaultTopK: 40, maxTopK: 128, defaultTemperature: 1, maxTemperature: 2 };
+    return { defaultTopK: 40, maxTopK: 128, defaultTemperature: 0.5, maxTemperature: 2 };
   }
 
   async countTokens(messages: ChatMessage[]) {

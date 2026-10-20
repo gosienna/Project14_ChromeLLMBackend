@@ -96,3 +96,30 @@ test("the transcript keeps the newest reply in view, also with panels open", asy
   await page.locator(".pg-tools-box > summary").click();
   await expect.poll(atEnd).toBe(true);
 });
+
+test("replies render Markdown and LaTeX, with a plain-text option", async ({ context, sw }) => {
+  const extId = new URL(sw.url()).host;
+  const page = await context.newPage();
+  const failed: string[] = [];
+  page.on("requestfailed", (r) => failed.push(r.url()));
+  page.on("response", (r) => r.status() >= 400 && failed.push(r.url()));
+  await page.goto(`chrome-extension://${extId}/ui/playground.html`);
+  await expect(page.locator(".pg-head")).toContainText("on dummy");
+  await page.getByLabel("Message", { exact: true }).fill("intro\n# Title\nSee [site](https://example.com) and $E = mc^2$.\n$$\\frac{a}{b}$$");
+  await page.getByRole("button", { name: "Send" }).click();
+  const answer = page.locator(".pg-assistant > .pg-text").last();
+  await expect(answer.locator("h1")).toHaveText("Title");
+  await expect(answer.locator('a[href="https://example.com"]')).toHaveAttribute("target", "_blank");
+  await expect(answer.locator(".katex")).toHaveCount(2);
+  await expect(answer.locator(".katex-display")).toHaveCount(1);
+  // KaTeX's bundled fonts load (from the extension, never a CDN).
+  await page.evaluate(() => document.fonts.ready);
+  expect(await page.evaluate(() => document.fonts.check("16px KaTeX_Main"))).toBe(true);
+  expect(failed).toEqual([]);
+
+  await page.locator(".pg-head details summary", { hasText: "Session options" }).click();
+  await page.getByLabel("Render Markdown and math in replies").uncheck();
+  await expect(answer.locator("h1")).toHaveCount(0);
+  await expect(answer).toContainText("# Title");
+  await expect(answer).toContainText("$$\\frac{a}{b}$$");
+});

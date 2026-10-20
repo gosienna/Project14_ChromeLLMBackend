@@ -2,6 +2,8 @@
 
 MV3 Chrome extension exposing a local or user-keyed cloud LLM to user-approved sites through a Prompt API–compatible `window.LanguageModel`. The plan is `docs/BUILD_PLAN.md`; progress against it is `docs/STATUS.md` — update STATUS when you finish a plan item.
 
+When the user approves a plan from plan mode for execution, first copy the plan file from `~/.claude/plans/` into `docs/`, prefixing the filename with the execution time (e.g. `docs/2026-10-20-1431-update-the-backend-to-warm-puppy.md`, from `date +%Y-%m-%d-%H%M`), before starting the work.
+
 ## Commands
 
 - `npm run typecheck` — TypeScript, no emit

@@ -10,6 +10,8 @@ export interface Limits {
   maxSessions: number;
   tokensPerMinute: number;
   maxContext: number;
+  /** Cap on generated tokens per prompt (max_tokens); also bounded by the context left. */
+  maxOutputTokens: number;
 }
 
 export interface Settings {
@@ -56,7 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ),
   customProviders: [],
   idleUnloadMinutes: 10,
-  limits: { maxSessions: 2, tokensPerMinute: 20_000, maxContext: 8192 },
+  limits: { maxSessions: 2, tokensPerMinute: 20_000, maxContext: 8192, maxOutputTokens: 16384 },
 };
 
 export function defaultSite(origin: string): SiteConfig {

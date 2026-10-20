@@ -5,7 +5,8 @@ import type { GenerateOptions, GenerateResult } from "../backend";
 /** An in-browser inference engine. Only one is loaded at a time, in the offscreen host. */
 export interface LocalEngine {
   readonly id: EngineId;
-  load(model: CatalogModel, caps: DeviceCaps, onProgress: (fraction: number) => void): Promise<void>;
+  /** `nCtx`: context to allocate, already capped to what the model and build allow. */
+  load(model: CatalogModel, caps: DeviceCaps, onProgress: (fraction: number) => void, nCtx: number): Promise<void>;
   unload(): Promise<void>;
   countTokens(messages: ChatMessage[]): Promise<number>;
   generate(messages: ChatMessage[], opts: GenerateOptions, signal: AbortSignal): AsyncGenerator<string, GenerateResult>;

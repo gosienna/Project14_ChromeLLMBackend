@@ -56,4 +56,4 @@ export interface Backend {
   generate(messages: ChatMessage[], opts: GenerateOptions, signal: AbortSignal): AsyncGenerator<string, GenerateResult>;
 }
 
-export const DEFAULT_PARAMS: ModelParams = { defaultTopK: 3, maxTopK: 128, defaultTemperature: 1, maxTemperature: 2 };
+export const DEFAULT_PARAMS: ModelParams = { defaultTopK: 3, maxTopK: 128, defaultTemperature: 0.5, maxTemperature: 2 };
