@@ -3,11 +3,45 @@
 // Every hop validates incoming messages with the functions below and drops
 // anything that does not match.
 
+/** Roles a page may send. The host's history also holds "tool" turns (see ChatMessage). */
 export type Role = "system" | "user" | "assistant";
 
+export const IMAGE_MIME_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
+export type ImageMime = (typeof IMAGE_MIME_TYPES)[number];
+
+/** Base64-encoded image. Only the extension's own playground page may send these. */
+export interface ImageInput {
+  mimeType: ImageMime;
+  data: string;
+}
+
 export interface ChatMessage {
-  role: Role;
+  role: Role | "tool";
   content: string;
+  /** User turns only. Pages never send images; parsePageRequest rejects them by default. */
+  images?: ImageInput[];
+  /** Assistant turns: tools the model asked for. Host history only; pages never send these. */
+  toolCalls?: ToolCall[];
+  /** Tool turns: the call this result answers, and the tool's name. */
+  toolCallId?: string;
+  name?: string;
+}
+
+/** A tool a page offers, as declared in LanguageModel.create({ tools }). `execute` stays in the page. */
+export interface ToolDecl {
+  name: string;
+  description: string;
+  /** JSON Schema for the arguments object. */
+  inputSchema: Record<string, unknown>;
+}
+
+/** A tool call the model made. */
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  /** Provider data that must be sent back with the call (Gemini thought signatures). */
+  signature?: string;
 }
 
 export type Availability = "unavailable" | "downloadable" | "downloading" | "available";
@@ -16,6 +50,7 @@ export interface SessionOptions {
   initialPrompts?: ChatMessage[];
   temperature?: number;
   topK?: number;
+  tools?: ToolDecl[];
 }
 
 export interface ModelParams {
@@ -45,9 +80,17 @@ export type PageRequest =
   | { kind: "append"; id: string; sessionId: string; input: ChatMessage[] }
   | { kind: "measure"; id: string; sessionId: string; input: ChatMessage[] }
   | { kind: "destroy"; id: string; sessionId: string }
-  | { kind: "abort"; id: string; target: string };
+  | { kind: "abort"; id: string; target: string }
+  /** The page ran a tool the model called during prompt `target`. */
+  | { kind: "tool-result"; id: string; target: string; callId: string; result: string; isError: boolean };
 
 export type PageRequestKind = PageRequest["kind"];
+
+/** Extension playground page -> router. Extension UI, so it may name the backend to test. */
+export interface PlaygroundEnvelope {
+  backend: string;
+  req: PageRequest;
+}
 
 // ---- Extension -> page responses ------------------------------------------
 
@@ -63,14 +106,29 @@ export type PageResponse =
   | { kind: "result"; id: string; value: unknown }
   | { kind: "error"; id: string; name: string; message: string }
   | { kind: "chunk"; id: string; text: string }
+  /** A reasoning model's thinking. The router forwards it to the extension's playground only. */
+  | { kind: "reasoning"; id: string; text: string }
   | { kind: "done"; id: string; inputUsage?: number }
-  | { kind: "progress"; id: string; loaded: number };
+  | { kind: "progress"; id: string; loaded: number }
+  /** Playground only: one generation's request and response, for the raw view. `round` counts tool rounds. */
+  | { kind: "trace"; id: string; round: number; trace: { engine: string; request: unknown; prompt?: string; response?: unknown } }
+  /** The model wants the page to run a tool; the page answers with a tool-result request. */
+  | { kind: "tool-call"; id: string; callId: string; name: string; arguments: Record<string, unknown> };
+
+export type PageResponseKind = PageResponse["kind"];
 
 // ---- Validation -----------------------------------------------------------
 
 const MAX_ID = 64;
 const MAX_TEXT = 1_000_000;
 const MAX_MESSAGES = 1000;
+/** Base64 length of a ~5 MB image, the smallest per-image limit among the cloud providers. */
+export const MAX_IMAGE_BASE64 = 7_000_000;
+export const MAX_IMAGES_PER_MESSAGE = 8;
+export const MAX_TOOLS = 32;
+const MAX_TOOL_DESCRIPTION = 4096;
+const MAX_TOOL_SCHEMA = 65_536;
+export const TOOL_NAME = /^[A-Za-z_][\w-]{0,63}$/;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -80,12 +138,21 @@ const isId = (v: unknown): v is string =>
 
 const isRole = (v: unknown): v is Role => v === "system" || v === "user" || v === "assistant";
 
-function isMessages(v: unknown): v is ChatMessage[] {
+function isImage(v: unknown): v is ImageInput {
+  if (!isObj(v) || Object.keys(v).some((k) => k !== "mimeType" && k !== "data")) return false;
+  return (IMAGE_MIME_TYPES as readonly unknown[]).includes(v.mimeType) &&
+    typeof v.data === "string" && v.data.length > 0 && v.data.length <= MAX_IMAGE_BASE64 && /^[A-Za-z0-9+/]+={0,2}$/.test(v.data);
+}
+
+function isMessages(v: unknown, images: boolean): v is ChatMessage[] {
   if (!Array.isArray(v) || v.length > MAX_MESSAGES) return false;
   let total = 0;
   for (const m of v) {
     if (!isObj(m) || !isRole(m.role) || typeof m.content !== "string") return false;
-    if (Object.keys(m).some((k) => k !== "role" && k !== "content")) return false;
+    if (Object.keys(m).some((k) => k !== "role" && k !== "content" && !(images && k === "images"))) return false;
+    if (m.images !== undefined) {
+      if (m.role !== "user" || !Array.isArray(m.images) || m.images.length > MAX_IMAGES_PER_MESSAGE || !m.images.every(isImage)) return false;
+    }
     total += m.content.length;
   }
   return total <= MAX_TEXT;
@@ -94,10 +161,32 @@ function isMessages(v: unknown): v is ChatMessage[] {
 const isOptNum = (v: unknown, min: number, max: number) =>
   v === undefined || (typeof v === "number" && Number.isFinite(v) && v >= min && v <= max);
 
+function jsonSize(v: unknown): number {
+  try {
+    return JSON.stringify(v).length;
+  } catch {
+    return Infinity;
+  }
+}
+
+function isTools(v: unknown): v is ToolDecl[] {
+  if (!Array.isArray(v) || v.length > MAX_TOOLS) return false;
+  const names = new Set<string>();
+  for (const t of v) {
+    if (!isObj(t) || Object.keys(t).some((k) => k !== "name" && k !== "description" && k !== "inputSchema")) return false;
+    if (typeof t.name !== "string" || !TOOL_NAME.test(t.name) || names.has(t.name)) return false;
+    if (typeof t.description !== "string" || t.description.length > MAX_TOOL_DESCRIPTION) return false;
+    if (!isObj(t.inputSchema) || jsonSize(t.inputSchema) > MAX_TOOL_SCHEMA) return false;
+    names.add(t.name);
+  }
+  return true;
+}
+
 function isSessionOptions(v: unknown): v is SessionOptions {
   if (!isObj(v)) return false;
-  if (Object.keys(v).some((k) => !["initialPrompts", "temperature", "topK"].includes(k))) return false;
-  if (v.initialPrompts !== undefined && !isMessages(v.initialPrompts)) return false;
+  if (Object.keys(v).some((k) => !["initialPrompts", "temperature", "topK", "tools"].includes(k))) return false;
+  if (v.initialPrompts !== undefined && !isMessages(v.initialPrompts, false)) return false;
+  if (v.tools !== undefined && !isTools(v.tools)) return false;
   return isOptNum(v.temperature, 0, 2) && isOptNum(v.topK, 1, 1000);
 }
 
@@ -112,10 +201,14 @@ const FIELDS: Record<PageRequestKind, string[]> = {
   measure: ["sessionId", "input"],
   destroy: ["sessionId"],
   abort: ["target"],
+  "tool-result": ["target", "callId", "result", "isError"],
 };
 
-/** Strictly validate a page request. Unknown kinds or extra fields are rejected. */
-export function parsePageRequest(v: unknown): PageRequest | null {
+/**
+ * Strictly validate a page request. Unknown kinds or extra fields are rejected. `images` allows
+ * image attachments on prompt/append/measure input; only the extension's playground sets it.
+ */
+export function parsePageRequest(v: unknown, { images = false }: { images?: boolean } = {}): PageRequest | null {
   if (!isObj(v) || typeof v.kind !== "string" || !(v.kind in FIELDS) || !isId(v.id)) return null;
   const kind = v.kind as PageRequestKind;
   const allowed = new Set(["kind", "id", ...FIELDS[kind]]);
@@ -133,14 +226,18 @@ export function parsePageRequest(v: unknown): PageRequest | null {
     case "destroy":
       return isId(v.sessionId) ? (v as PageRequest) : null;
     case "prompt":
-      return isId(v.sessionId) && isMessages(v.input) && typeof v.stream === "boolean"
+      return isId(v.sessionId) && isMessages(v.input, images) && typeof v.stream === "boolean"
         ? (v as PageRequest)
         : null;
     case "append":
     case "measure":
-      return isId(v.sessionId) && isMessages(v.input) ? (v as PageRequest) : null;
+      return isId(v.sessionId) && isMessages(v.input, images) ? (v as PageRequest) : null;
     case "abort":
       return isId(v.target) ? (v as PageRequest) : null;
+    case "tool-result":
+      return isId(v.target) && isId(v.callId) && typeof v.result === "string" && v.result.length <= MAX_TEXT && typeof v.isError === "boolean"
+        ? (v as PageRequest)
+        : null;
   }
 }
 
@@ -158,6 +255,8 @@ export function parsePageResponse(v: unknown): PageResponse | null {
       return v.inputUsage === undefined || typeof v.inputUsage === "number" ? (v as PageResponse) : null;
     case "progress":
       return typeof v.loaded === "number" ? (v as PageResponse) : null;
+    case "tool-call":
+      return isId(v.callId) && typeof v.name === "string" && isObj(v.arguments) ? (v as PageResponse) : null;
     default:
       return null;
   }
@@ -174,6 +273,12 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/** Flat per-image estimate (providers bill roughly 250–1600 tokens depending on size). */
+export const IMAGE_TOKEN_ESTIMATE = 1000;
+
 export function estimateMessageTokens(messages: ChatMessage[]): number {
-  return messages.reduce((n, m) => n + estimateTokens(m.content) + 4, 0);
+  return messages.reduce(
+    (n, m) => n + estimateTokens(m.content) + 4 + (m.images?.length ?? 0) * IMAGE_TOKEN_ESTIMATE + (m.toolCalls ? estimateTokens(JSON.stringify(m.toolCalls)) : 0),
+    0,
+  );
 }

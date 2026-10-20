@@ -3,6 +3,7 @@ import { anthropicAdapter } from "../src/offscreen/adapters/anthropic";
 import { geminiAdapter } from "../src/offscreen/adapters/gemini";
 import { openAICompatAdapter } from "../src/offscreen/adapters/openai-compat";
 import type { Adapter } from "../src/offscreen/adapters/types";
+import type { ChatMessage } from "../src/shared/protocol";
 import { BUILTIN_PROVIDERS } from "../src/shared/providers";
 import { streamOf } from "./streams";
 
@@ -18,8 +19,11 @@ function mockFetch(body: string, status = 200) {
   return { f, calls };
 }
 
-async function run(adapter: Adapter, id: string, f: typeof fetch, signal = new AbortController().signal) {
-  const gen = adapter({ provider: provider(id), model: "m", apiKey: "KEY" }, [{ role: "system", content: "S" }, { role: "user", content: "hi" }], { temperature: 0.5, topK: 3 }, signal, f);
+const IMG = { mimeType: "image/png", data: "iVBORw0KGgo=" } as const;
+const withImage: ChatMessage[] = [{ role: "user", content: "what is this", images: [IMG] }, { role: "assistant", content: "a cat" }, { role: "user", content: "", images: [IMG] }];
+
+async function run(adapter: Adapter, id: string, f: typeof fetch, signal = new AbortController().signal, messages: ChatMessage[] = [{ role: "system", content: "S" }, { role: "user", content: "hi" }]) {
+  const gen = adapter({ provider: provider(id), model: "m", apiKey: "KEY" }, messages, { temperature: 0.5, topK: 3 }, signal, f);
   const chunks: string[] = [];
   let step = await gen.next();
   while (!step.done) {
@@ -92,5 +96,42 @@ describe("geminiAdapter", () => {
     const body = JSON.parse(calls[0].init.body as string);
     expect(body.systemInstruction.parts[0].text).toBe("S");
     expect(body.contents).toEqual([{ role: "user", parts: [{ text: "hi" }] }]);
+  });
+});
+
+describe("image input", () => {
+  const body = (calls: Array<{ init: RequestInit }>) => JSON.parse(calls[0].init.body as string);
+
+  it("anthropic: base64 image blocks before the text, no empty text block", async () => {
+    const { f, calls } = mockFetch(sse([{ type: "message_stop" }]));
+    await run(anthropicAdapter, "anthropic", f, undefined, withImage);
+    const image = { type: "image", source: { type: "base64", media_type: "image/png", data: IMG.data } };
+    expect(body(calls).messages).toEqual([
+      { role: "user", content: [image, { type: "text", text: "what is this" }] },
+      { role: "assistant", content: "a cat" },
+      { role: "user", content: [image] },
+    ]);
+  });
+
+  it("openai-compat: data URL image parts, and no extra fields leak into messages", async () => {
+    const { f, calls } = mockFetch(sse([], true));
+    await run(openAICompatAdapter, "openai", f, undefined, withImage);
+    const image = { type: "image_url", image_url: { url: `data:image/png;base64,${IMG.data}` } };
+    expect(body(calls).messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "what is this" }, image] },
+      { role: "assistant", content: "a cat" },
+      { role: "user", content: [image] },
+    ]);
+  });
+
+  it("gemini: inlineData parts", async () => {
+    const { f, calls } = mockFetch(sse([]));
+    await run(geminiAdapter, "gemini", f, undefined, withImage);
+    const image = { inlineData: { mimeType: "image/png", data: IMG.data } };
+    expect(body(calls).contents).toEqual([
+      { role: "user", parts: [image, { text: "what is this" }] },
+      { role: "model", parts: [{ text: "a cat" }] },
+      { role: "user", parts: [image] },
+    ]);
   });
 });

@@ -18,6 +18,8 @@ export interface Settings {
     modelId: string;
     /** Per-model engine pin; missing or "auto" means auto-select. */
     enginePin: Record<string, EngineId | "auto">;
+    /** Let reasoning models think before answering (slower, better answers). */
+    reasoning: boolean;
   };
   providers: Record<string, { enabled: boolean; model: string; monthlyTokenCap: number }>;
   customProviders: ProviderDef[];
@@ -48,7 +50,7 @@ export interface UsageEntry {
 
 export const DEFAULT_SETTINGS: Settings = {
   overrideNative: false,
-  local: { modelId: "qwen2.5-0.5b-instruct", enginePin: {} },
+  local: { modelId: "qwen2.5-0.5b-instruct", enginePin: {}, reasoning: true },
   providers: Object.fromEntries(
     BUILTIN_PROVIDERS.map((p) => [p.id, { enabled: false, model: p.defaultModel, monthlyTokenCap: 2_000_000 }]),
   ),

@@ -1,14 +1,19 @@
 // Local model lifecycle in the offscreen host: capability probe, engine auto-selection, lazy
 // load, one loaded model at a time, FIFO generation queue and idle unload.
 
-import { autoSelectEngine, canRun, type CatalogModel, type DeviceCaps, type EngineId } from "../shared/catalog";
-import type { Availability, ChatMessage, ModelParams, Usage } from "../shared/protocol";
-import { DEFAULT_PARAMS, type Backend, type GenerateOptions } from "./backend";
+import { ALL_CAPS, autoSelectEngine, canRun, takesImages, toolMode, type CatalogModel, type DeviceCaps, type EngineId } from "../shared/catalog";
+import type { Availability, ChatMessage, ModelParams } from "../shared/protocol";
+import { DEFAULT_PARAMS, type Backend, type GenerateOptions, type GenerateResult } from "./backend";
 import { DummyEngine } from "./engines/dummy";
 import { NanoEngine, nanoSupported } from "./engines/nano";
 import type { LocalEngine } from "./engines/types";
+import { withResponseTrace } from "./trace";
+import { removeLegacyStorage } from "./model-store";
 
 const DOWNLOADED_KEY = "downloadedModels";
+/** Where downloaded weights live; a different value means they were stored the old way. */
+const STORAGE_KEY = "modelStorage";
+const STORAGE = "indexeddb";
 
 function createEngine(id: EngineId): Promise<LocalEngine> | LocalEngine {
   switch (id) {
@@ -25,8 +30,22 @@ function createEngine(id: EngineId): Promise<LocalEngine> | LocalEngine {
   }
 }
 
+// Same checks as wllama's isSupportJSPI / isSupportMem64, without loading wllama.
+function supportsJspi(): boolean {
+  return !!(WebAssembly as unknown as { Suspending?: unknown }).Suspending;
+}
+
+function supportsMem64(): boolean {
+  try {
+    new WebAssembly.Memory({ address: "i64", initial: 1n } as unknown as WebAssembly.MemoryDescriptor);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export class LocalRuntime {
-  caps: DeviceCaps = { webgpu: false, maxBufferMB: 0 };
+  caps: DeviceCaps = { webgpu: false, maxBufferMB: 0, jspi: false, mem64: false };
   private current: { model: CatalogModel; engine: LocalEngine } | null = null;
   private loading: { key: string; promise: Promise<LocalEngine>; listeners: Set<(f: number) => void> } | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -34,16 +53,25 @@ export class LocalRuntime {
   private active = 0;
 
   async probe(): Promise<DeviceCaps> {
+    const wasm = { jspi: supportsJspi(), mem64: supportsMem64() };
     try {
       const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<{ limits: { maxStorageBufferBindingSize: number } } | null> } }).gpu;
       const adapter = await gpu?.requestAdapter();
       this.caps = adapter
-        ? { webgpu: true, maxBufferMB: Math.round(adapter.limits.maxStorageBufferBindingSize / 2 ** 20) }
-        : { webgpu: false, maxBufferMB: 0 };
+        ? { webgpu: true, maxBufferMB: Math.round(adapter.limits.maxStorageBufferBindingSize / 2 ** 20), ...wasm }
+        : { webgpu: false, maxBufferMB: 0, ...wasm };
     } catch {
-      this.caps = { webgpu: false, maxBufferMB: 0 };
+      this.caps = { webgpu: false, maxBufferMB: 0, ...wasm };
     }
     return this.caps;
+  }
+
+  /** One-time move to IndexedDB: drop the old copies and the list that described them. */
+  async migrateStorage(): Promise<void> {
+    if (localStorage.getItem(STORAGE_KEY) === STORAGE) return;
+    await removeLegacyStorage();
+    localStorage.removeItem(DOWNLOADED_KEY);
+    localStorage.setItem(STORAGE_KEY, STORAGE);
   }
 
   resolveEngine(model: CatalogModel, pin: EngineId | "auto"): EngineId | null {
@@ -123,7 +151,7 @@ export class LocalRuntime {
 
   async deleteModel(model: CatalogModel): Promise<void> {
     for (const id of ["transformers", "webllm", "wllama"] as EngineId[]) {
-      if (!canRun(model, id, { webgpu: true, maxBufferMB: Infinity })) continue;
+      if (!canRun(model, id, ALL_CAPS)) continue;
       if (this.current?.model.id === model.id) await this.unload();
       const engine = await createEngine(id);
       await engine.deleteCache(model).catch(() => {});
@@ -166,6 +194,8 @@ export class LocalBackend implements Backend {
     readonly model: CatalogModel,
     private pin: EngineId | "auto",
     private idleMinutes: number,
+    /** Let reasoning models think; off asks them to skip or shorten it. */
+    private reasoning = true,
   ) {}
 
   describe() {
@@ -185,8 +215,18 @@ export class LocalBackend implements Backend {
     return this.model.contextWindow;
   }
 
+  acceptsImages() {
+    const engine = this.runtime.resolveEngine(this.model, this.pin);
+    return engine !== null && takesImages(this.model, engine);
+  }
+
   params(): ModelParams {
     return DEFAULT_PARAMS;
+  }
+
+  toolMode() {
+    const engine = this.runtime.resolveEngine(this.model, this.pin);
+    return engine ? toolMode(this.model, engine) : "prompted";
   }
 
   async countTokens(messages: ChatMessage[]) {
@@ -194,13 +234,15 @@ export class LocalBackend implements Backend {
     return engine.countTokens(messages);
   }
 
-  generate(messages: ChatMessage[], opts: GenerateOptions, signal: AbortSignal): AsyncGenerator<string, Usage> {
+  generate(messages: ChatMessage[], opts: GenerateOptions, signal: AbortSignal): AsyncGenerator<string, GenerateResult> {
     const runtime = this.runtime;
     const model = this.model;
     const pin = this.pin;
+    const withReasoning = { ...opts, reasoning: this.reasoning };
     return runtime.exclusive(async function* () {
       const engine = await runtime.ensure(model, pin);
-      return yield* engine.generate(messages, opts, signal);
+      // Engines report their request; the wrapper adds the response for the playground's raw view.
+      return yield* withResponseTrace(withReasoning, (o) => engine.generate(messages, o, signal));
     }, this.idleMinutes);
   }
 }

@@ -44,7 +44,8 @@ export interface BridgeEnvelope {
     if (!data || data.nonce !== nonce) return;
     const req = parsePageRequest(data.msg);
     if (!req) return; // drop unknown or malformed messages
-    if (req.kind !== "abort" && req.kind !== "destroy") inFlight.add(req.id);
+    // abort, destroy and tool-result get no reply of their own.
+    if (req.kind !== "abort" && req.kind !== "destroy" && req.kind !== "tool-result") inFlight.add(req.id);
     const envelope: BridgeEnvelope = { req, visible: document.visibilityState === "visible" };
     try {
       connect().postMessage(envelope);

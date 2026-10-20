@@ -26,12 +26,13 @@ console.log(await session.prompt("Write a haiku about browsers"));
    - [Conversations and context](#7-conversations-and-context)
    - [Cancelling](#8-cancelling)
    - [Cloning and destroying sessions](#9-cloning-and-destroying-sessions)
-   - [Model information](#10-model-information)
-   - [Errors](#11-errors)
-   - [Limits](#12-limits)
-   - [Falling back when there is no model](#13-falling-back-when-there-is-no-model)
-   - [Complete example](#14-complete-example)
-   - [Testing your integration](#15-testing-your-integration)
+   - [Tool calling](#10-tool-calling)
+   - [Model information](#11-model-information)
+   - [Errors](#12-errors)
+   - [Limits](#13-limits)
+   - [Falling back when there is no model](#14-falling-back-when-there-is-no-model)
+   - [Complete example](#15-complete-example)
+   - [Testing your integration](#16-testing-your-integration)
    - [API reference](#api-reference)
    - [Security and privacy notes for app developers](#security-and-privacy-notes-for-app-developers)
 4. [Architecture](#architecture)
@@ -61,8 +62,9 @@ npm run build               # -> dist/
 1. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and choose `dist/`.
 2. Open the extension's options page (toolbar icon → **Settings, models and usage**) and pick a local model. Optionally click **Download / load** to fetch the weights now. Otherwise they download on first use (Qwen2.5 0.5B, about 480 MB).
 3. Optional: under **Cloud providers**, enable a provider and paste your API key.
+4. To try it out, click the toolbar icon → **Open playground**. It's a chat page inside the extension. Pick the local model or any enabled provider, and attach, paste or drop images. Images work with cloud providers, Chrome's built-in model and local vision models (shown as `text+image→text` in the options). Each reply has a **Raw** view with the exact request the model received and its raw response for every tool round, and **Show raw** previews the next request; **Edit JSON** lets you change it before sending. The **Tools** panel gives the model the extension's own tools: browser automation on your tabs, Tavily web search (key in options → Tools), tools you write (sandboxed JavaScript), and registry tools that let the model create and edit tools. They're off until you enable them, risky ones ask before each run, and websites never get them. Playground conversations aren't tied to a website and aren't saved.
 
-Requires Chrome 116 or later. Local models run fastest with WebGPU; without it the extension falls back to CPU (wllama).
+Requires Chrome 116 or later. Local models run fastest with WebGPU; without it the extension falls back to CPU (wllama). Models larger than about 3.5 GB (up to Qwen3.5 122B) run on wllama with WebGPU and need Chrome 137+ (JSPI and Memory64) and enough GPU memory: unified memory on Apple Silicon, VRAM elsewhere.
 
 ---
 
@@ -102,7 +104,7 @@ function waitForLanguageModel(timeout = 500) {
 }
 ```
 
-The [`@local-llm/web`](#13-falling-back-when-there-is-no-model) helper does this for you.
+The [`@local-llm/web`](#14-falling-back-when-there-is-no-model) helper does this for you.
 
 **Chrome's built-in model:** if the browser already provides a native `LanguageModel`, the extension leaves it alone. Your page talks to Chrome's model directly unless the user turns on **Override Chrome's native LanguageModel** in the extension's settings.
 
@@ -224,21 +226,54 @@ session.destroy(); // frees the session; any in-flight request rejects with Abor
 
 Always call `destroy()` on sessions you no longer need. Each site may have only **2** open sessions by default. Sessions are also freed automatically when the tab is closed or navigates away.
 
-### 10. Model information
+### 10. Tool calling
+
+Give the session tools at `create()`, in the same shape as Chrome's native Prompt API. When the model decides to use a tool, the extension calls your `execute()` in the page, passes the result back to the model, and `prompt()` resolves with the final answer. Your functions never leave the page; the extension only sees each tool's name, description and input schema.
+
+```js
+const session = await LanguageModel.create({
+  tools: [
+    {
+      name: "getWeather",
+      description: "Current weather for a city",
+      inputSchema: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"],
+      },
+      async execute({ city }) {
+        const res = await fetch(`/api/weather?city=${encodeURIComponent(city)}`);
+        return JSON.stringify(await res.json()); // a string; other values are JSON-encoded
+      },
+    },
+  ],
+});
+
+console.log(await session.prompt("Should I take an umbrella in Paris today?"));
+```
+
+- **It works with every backend.** Cloud providers (Anthropic, OpenAI-compatible, Gemini) and local GGUF models whose chat template supports tools use their **native** tool calling. Every other local model uses **prompted** tool calling: the tools are described in the system prompt and the model's `<tool_call>` replies are parsed. Prompted calling depends on the model following instructions, so small models may skip tools or call them badly. `localLLM.info()` reports `tools: "native" | "prompted"` for the current backend, and the options page shows the mode per model and engine.
+- **Calls run in parallel** when the model asks for several at once. A model may chain up to 8 rounds of tool calls per prompt; after that it must answer without tools.
+- **If `execute()` throws,** the model receives `Error: <message>` as the result and can recover or explain.
+- **Aborting** the prompt's `signal`, or destroying the session, cancels a prompt that's waiting on a tool. Your `execute()` keeps running; check your own signal if it does long work.
+- **Tool results become model input,** and they count toward the context window and the site's token limits. Return only what the model needs.
+- `clone()` keeps the tools. Tools must have unique names made of letters, digits, `_` or `-`, and a session can have at most 32. Malformed tools make `create()` throw a `TypeError`.
+
+### 11. Model information
 
 The extension adds a small non-standard namespace, which is absent with Chrome's native API:
 
 ```js
 if (window.localLLM) {
   const info = await window.localLLM.info();
-  // { name: "Qwen2.5 0.5B Instruct (default)", backend: "webllm", version: "0.1.0" }
+  // { name: "Qwen2.5 0.5B Instruct (default)", backend: "webllm", images: false, tools: "prompted", version: "0.1.0" }
   // backend is the local engine ("transformers" | "webllm" | "wllama" | "nano"), or the provider name for cloud
 }
 ```
 
 The user chooses the model and backend. Your site can't select them.
 
-### 11. Errors
+### 12. Errors
 
 All failures reject with a `DOMException`. Check `error.name`:
 
@@ -255,7 +290,7 @@ All failures reject with a `DOMException`. Check `error.name`:
 
 Invalid arguments, such as a bad role or a malformed message array, throw a plain `TypeError`.
 
-### 12. Limits
+### 13. Limits
 
 The user can change all of these in the extension's options; the defaults are:
 
@@ -272,7 +307,7 @@ Also:
 - Background tabs can only start generation if the user chose **Always allow** for your site.
 - Only the top-level page gets the API. Iframes, including same-origin ones, don't.
 
-### 13. Falling back when there is no model
+### 14. Falling back when there is no model
 
 Plan for the model to be missing: the extension isn't installed, the site isn't enabled, the user denied it, or the device can't run a model. The [`@local-llm/web`](packages/web) helper in this repository wraps detection and fallback. It isn't published to npm yet: build it from `packages/web` (`npm run build` there) or copy `packages/web/src/index.ts` into your project.
 
@@ -311,7 +346,7 @@ async function ask(question) {
 }
 ```
 
-### 14. Complete example
+### 15. Complete example
 
 A chat box with streaming, a stop button, download progress and fallback, in plain HTML and JavaScript:
 
@@ -357,7 +392,7 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 </script>
 ```
 
-### 15. Testing your integration
+### 16. Testing your integration
 
 - **Local origin:** serve your app (for example `http://localhost:3000`), then enable that origin from the toolbar icon or the options page. Ports are respected: enabling `localhost:3000` doesn't enable `localhost:8080`.
 - **Without downloading a model:** in the extension's options, set the model to **Echo (test engine, no model)**. Every prompt then returns `Echo #<turn>: <your text>`, which is instant and deterministic, so it suits UI work and automated tests.
@@ -379,10 +414,11 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 | `session.temperature`, `session.topK` | Effective sampling values |
 | `session.clone({ signal })` | Copies the conversation |
 | `session.destroy()` | Frees the session |
-| `window.localLLM.info()` | Extension only: `{ name, backend, version }` |
+| `LanguageModel.create({ tools })` | Tools with `execute()`, run in the page; see [Tool calling](#10-tool-calling) |
+| `window.localLLM.info()` | Extension only: `{ name, backend, images, tools, version }` |
 | `window.localLLM.version`, `window.localLLM.overridesNative` | Extension only |
 | `localllm:ready` event on `window` | Fired when the extension's API is injected |
-| Not yet | `responseConstraint`, tool calling (planned under `window.localLLM.tools`), image/audio input, `quotaoverflow` event |
+| Not yet | `responseConstraint`, image/audio input from pages, `quotaoverflow` event |
 
 ### Security and privacy notes for app developers
 
@@ -414,6 +450,7 @@ offscreen host (sessions, FIFO queue, one loaded model)
 - The page-side stub only tracks request ids; it holds no model and has no extension privileges.
 - The service worker trusts only the origin Chrome reports for the connection, never anything inside a message, and validates every message against a strict schema.
 - The offscreen host loads the model once for every tab and site and streams text pieces back up the same path.
+- The playground (`ui/playground.html`) opens its own port to the service worker. Only that extension page may use it. Because it's the user's own UI, it may pick the backend and attach images, and it skips the site consent gate. Provider spend caps still apply, and keys still stay in the service worker.
 
 See `CLAUDE.md` for the source layout and the rules each layer follows.
 

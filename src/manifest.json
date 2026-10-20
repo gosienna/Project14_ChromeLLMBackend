@@ -9,6 +9,7 @@
     "type": "module"
   },
   "permissions": ["offscreen", "storage", "scripting", "unlimitedStorage"],
+  "optional_permissions": ["downloads", "debugger"],
   "host_permissions": [],
   "optional_host_permissions": [
     "<all_urls>",
@@ -19,7 +20,8 @@
     "https://api.deepseek.com/*",
     "https://openrouter.ai/*",
     "http://localhost/*",
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "https://api.tavily.com/*"
   ],
   "action": {
     "default_title": "Local LLM",
@@ -31,6 +33,7 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
+  "sandbox": { "pages": ["ui/tool-sandbox.html"] },
   "cross_origin_embedder_policy": { "value": "require-corp" },
   "cross_origin_opener_policy": { "value": "same-origin" }
 }

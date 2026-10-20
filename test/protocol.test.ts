@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parsePageRequest, parsePageResponse } from "../src/shared/protocol";
+import {
+  MAX_IMAGE_BASE64,
+  MAX_IMAGES_PER_MESSAGE,
+  estimateMessageTokens,
+  parsePageRequest,
+  parsePageResponse,
+  type ImageInput,
+} from "../src/shared/protocol";
 
 describe("parsePageRequest", () => {
   it("accepts well-formed requests", () => {
@@ -24,6 +31,35 @@ describe("parsePageRequest", () => {
     expect(parsePageRequest({ kind: "prompt", id: "r1" })).toBeNull();
     expect(parsePageRequest(null)).toBeNull();
     expect(parsePageRequest("availability")).toBeNull();
+  });
+});
+
+describe("image input", () => {
+  const img = { mimeType: "image/png", data: "iVBORw0KGgo=" };
+  const prompt = (input: unknown) => ({ kind: "prompt", id: "r1", sessionId: "s1", input, stream: true });
+
+  it("is rejected from pages", () => {
+    expect(parsePageRequest(prompt([{ role: "user", content: "x", images: [img] }]))).toBeNull();
+  });
+
+  it("is accepted from the playground on user turns", () => {
+    expect(parsePageRequest(prompt([{ role: "user", content: "", images: [img] }]), { images: true })).toBeTruthy();
+    expect(parsePageRequest(prompt([{ role: "assistant", content: "x", images: [img] }]), { images: true })).toBeNull();
+  });
+
+  it("validates type, encoding, size and count", () => {
+    const one = (i: unknown) => parsePageRequest(prompt([{ role: "user", content: "x", images: [i] }]), { images: true });
+    expect(one({ mimeType: "image/svg+xml", data: "PHN2Zz4=" })).toBeNull();
+    expect(one({ mimeType: "image/png", data: "not base64!" })).toBeNull();
+    expect(one({ mimeType: "image/png", data: "" })).toBeNull();
+    expect(one({ ...img, url: "https://evil.example/x.png" })).toBeNull();
+    expect(one({ mimeType: "image/png", data: "A".repeat(MAX_IMAGE_BASE64 + 4) })).toBeNull();
+    const many = Array.from({ length: MAX_IMAGES_PER_MESSAGE + 1 }, () => img);
+    expect(parsePageRequest(prompt([{ role: "user", content: "x", images: many }]), { images: true })).toBeNull();
+  });
+
+  it("counts toward the token estimate", () => {
+    expect(estimateMessageTokens([{ role: "user", content: "", images: [img as ImageInput] }])).toBeGreaterThanOrEqual(1000);
   });
 });
 

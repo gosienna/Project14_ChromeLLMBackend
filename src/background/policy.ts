@@ -1,7 +1,7 @@
 // Model-gate policy: decides what a request from an origin may do given its consent state.
 // Pure logic so the rules can be unit-tested; router.ts supplies the inputs.
 
-import type { PageRequestKind } from "../shared/protocol";
+import type { PageRequestKind, PageResponseKind } from "../shared/protocol";
 import type { SiteConfig } from "../shared/settings";
 
 export type Gate =
@@ -24,7 +24,8 @@ export interface GateInput {
 const deny = (message: string): Gate => ({ action: "deny", name: "NotAllowedError", message });
 
 export function gate({ kind, site, permitted, onceGrant, visible }: GateInput): Gate {
-  if (kind === "abort" || kind === "destroy") return { action: "allow" };
+  // Tool results answer a prompt that already passed this gate, like abort and destroy.
+  if (kind === "abort" || kind === "destroy" || kind === "tool-result") return { action: "allow" };
   if (!permitted || !site) return deny("This site is not enabled for the local model");
   // Discovery calls never prompt; availability() reports consent state itself.
   if (kind === "availability" || kind === "params" || kind === "info") return { action: "allow" };
@@ -42,4 +43,12 @@ export function consentAvailability(site: SiteConfig | undefined, permitted: boo
   if (!permitted || !site || site.consent === "deny") return "unavailable";
   if (site.consent === "always" || onceGrant) return null;
   return "downloadable";
+}
+
+/**
+ * Pages get the model's answer only, as the Prompt API defines it. A reasoning model's thinking
+ * and the raw request/response traces go to the extension's own playground and nowhere else.
+ */
+export function deliversTo(kind: PageResponseKind, toPlayground: boolean): boolean {
+  return (kind !== "reasoning" && kind !== "trace") || toPlayground;
 }

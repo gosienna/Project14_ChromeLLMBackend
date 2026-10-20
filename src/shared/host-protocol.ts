@@ -6,7 +6,7 @@ import type { PageRequest, PageResponse, Usage } from "./protocol";
 import type { ProviderDef } from "./providers";
 
 export type BackendSpec =
-  | { kind: "local"; model: CatalogModel; engine: EngineId | "auto" }
+  | { kind: "local"; model: CatalogModel; engine: EngineId | "auto"; reasoning: boolean }
   | { kind: "cloud"; provider: ProviderDef; model: string; apiKey: string };
 
 export interface HostRequest {
@@ -24,6 +24,8 @@ export interface HostRequest {
   backends?: Array<{ id: string; spec: BackendSpec }>;
   limits: { maxSessions: number; maxContext: number };
   idleUnloadMinutes: number;
+  /** Set only for the extension's playground: report raw request/response traces. */
+  trace?: boolean;
 }
 
 export interface HostResponse {
@@ -42,7 +44,9 @@ export type AdminOp =
   | { op: "deleteModel"; model: CatalogModel }
   | { op: "unload" }
   | { op: "revokeOrigin"; origin: string }
-  | { op: "releaseOwner"; owner: string };
+  | { op: "releaseOwner"; owner: string }
+  /** The playground's web_search tool. The router adds the key; the page never sees it. */
+  | { op: "webSearch"; apiKey: string; query: string; maxResults: number };
 
 export interface HostStatus {
   caps: DeviceCaps;

@@ -1,4 +1,4 @@
-// Toolbar popup: enable the current site (browser gate) and see active sessions.
+// Toolbar popup: enable the current site (browser gate), see active sessions, open the playground.
 
 import { getSite, normalizeOrigin, originPattern } from "../shared/settings";
 import { h, send } from "./dom";
@@ -51,7 +51,9 @@ async function main() {
   } else {
     app.append(h("p", { class: "muted" }, "Open a website to enable it."));
   }
-  app.append(h("p", { class: "small", style: "margin-top:12px" }, h("a", { href: "#", onclick: (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); } }, "Settings, models and usage →")));
+  app.append(h("div", { class: "actions" },
+    h("button", { onclick: async () => { await chrome.tabs.create({ url: chrome.runtime.getURL("ui/playground.html") }); window.close(); } }, "Open playground"),
+    h("p", { class: "small" }, h("a", { href: "#", onclick: (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); } }, "Settings, models and usage →"))));
 }
 
 main().catch((e) => app.append(h("p", { class: "warn" }, String(e))));

@@ -1,7 +1,7 @@
 // Options page: sites, local models, cloud providers and keys, limits, usage log.
 
 import { estimateCost } from "../background/limits";
-import { CATALOG, autoSelectEngine, canRun, findModel, type EngineId } from "../shared/catalog";
+import { ALL_CAPS, CATALOG, autoSelectEngine, canRun, findModel, ioLabel, toolMode, whyNot, type CatalogModel, type EngineId } from "../shared/catalog";
 import type { HostStatus } from "../shared/host-protocol";
 import { deleteKey, disableLock, enableLock, keystoreStatus, lock, setKey, unlock } from "../shared/keystore";
 import { BUILTIN_PROVIDERS, customProvider } from "../shared/providers";
@@ -124,35 +124,67 @@ const ENGINE_ORDER: EngineId[] = ["webllm", "transformers", "wllama", "nano", "d
 const ENGINE_LABELS: Record<EngineId, string> = {
   webllm: "WebLLM (WebGPU)",
   transformers: "Transformers.js (WebGPU or WASM)",
-  wllama: "wllama (CPU, GGUF)",
+  wllama: "wllama (GGUF · WebGPU or CPU)",
   nano: "Chrome built-in",
   dummy: "Echo (test)",
 };
 
+const fmtSize = (mb: number) => (mb >= 1000 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+
+/** Model picker groups by download size; large models need WebGPU and plenty of GPU memory. */
+const MODEL_GROUPS: Array<{ label: string; has: (m: CatalogModel) => boolean }> = [
+  { label: "Small", has: (m) => m.sizeMB > 0 && m.sizeMB <= 2500 },
+  { label: "Medium (WebGPU recommended)", has: (m) => m.sizeMB > 2500 && m.sizeMB <= 8000 },
+  { label: "Large (WebGPU, 8 GB+ GPU memory)", has: (m) => m.sizeMB > 8000 },
+  { label: "Built-in and test", has: (m) => m.sizeMB === 0 },
+];
+
 async function localSection(): Promise<HTMLElement> {
   const status = await send<HostStatus>({ type: "admin", admin: { op: "status" } }).catch(() => null);
-  const caps = status?.caps ?? { webgpu: false, maxBufferMB: 0 };
+  const caps = status?.caps ?? { webgpu: false, maxBufferMB: 0, jspi: false, mem64: false };
   const est = await navigator.storage.estimate().catch(() => ({ usage: 0, quota: 0 }));
   const model = findModel(settings.local.modelId) ?? CATALOG[0];
   const pin = settings.local.enginePin[model.id] ?? "auto";
 
   const modelSel = h("select", {
     onchange: async (e) => { await save((s) => (s.local.modelId = (e.target as HTMLSelectElement).value)); render(); },
-  }, ...CATALOG.map((m) => h("option", { value: m.id, selected: m.id === model.id }, `${m.name}${m.sizeMB ? ` · ~${m.sizeMB} MB` : ""}`)));
+  }, ...MODEL_GROUPS.map((g) => h("optgroup", { label: g.label }, ...CATALOG.filter(g.has).map((m) =>
+    h("option", { value: m.id, selected: m.id === model.id }, `${m.name}${m.sizeMB ? ` · ~${fmtSize(m.sizeMB)}` : ""} · ${ioLabel(m)}${m.tools ? " · tools" : ""}${m.reasoning ? " · reasoning" : ""}`)))));
 
   // List every engine the model has a build for; ones this device can't run stay visible but disabled.
   const downloaded = status?.downloaded ?? [];
   const engineLabel = (e: EngineId) => `${ENGINE_LABELS[e]}${downloaded.includes(`${e}:${model.id}`) ? " · downloaded" : ""}`;
   const auto = autoSelectEngine(model, caps);
-  const engines = ENGINE_ORDER.filter((e) => canRun(model, e, { webgpu: true, maxBufferMB: Infinity }));
+  const engines = ENGINE_ORDER.filter((e) => canRun(model, e, ALL_CAPS));
   const engineSel = h("select", {
     onchange: async (e) => { await save((s) => (s.local.enginePin[model.id] = (e.target as HTMLSelectElement).value as EngineId)); render(); },
   },
     h("option", { value: "auto", selected: pin === "auto" }, `Auto-select → ${auto ? engineLabel(auto) : "none available"}`),
     ...engines.map((e) => {
-      const ok = canRun(model, e, caps);
-      return h("option", { value: e, selected: e === pin, disabled: !ok }, ok ? engineLabel(e) : `${ENGINE_LABELS[e]} — needs WebGPU`);
+      const reason = whyNot(model, e, caps);
+      return h("option", { value: e, selected: e === pin, disabled: !!reason }, reason ? `${ENGINE_LABELS[e]} — ${reason}` : engineLabel(e));
     }));
+
+  // What the model can do depends on the engine: vision parts and tool calling come with some builds only.
+  const active = pin !== "auto" && canRun(model, pin, caps) ? pin : auto;
+  const free = (est.quota ?? 0) - (est.usage ?? 0);
+  const modelInfo = h("div", { class: "small muted", style: "margin-top:8px" },
+    model.sizeMB
+      ? h("p", {},
+          `${model.params} parameters · ~${fmtSize(model.sizeMB)} download · needs ~${fmtSize(model.minVramMB)} of GPU memory (unified memory on Apple Silicon)`,
+          model.reasoning ? " · reasoning model: thinks before answering" : "",
+          free > 0 && free < model.sizeMB * 2 ** 20 ? h("strong", {}, ` · only ${fmtMB(free)} of storage free`) : "")
+      : null,
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ...["Engine", "Input → output", "Tool calling"].map((t) => h("th", {}, t)))),
+      h("tbody", {}, ...engines.map((e) => {
+        const reason = whyNot(model, e, caps);
+        return h("tr", {},
+          h("td", {}, e === active ? h("strong", {}, `${ENGINE_LABELS[e]} (runs)`) : ENGINE_LABELS[e], reason ? ` — ${reason}` : ""),
+          h("td", {}, ioLabel(model, e)),
+          h("td", {}, toolMode(model, e) === "native" ? "native" : "prompted"));
+      })))),
+  );
 
   const bar = h("progress", { max: 1, value: 0, hidden: true });
   const msg = h("span", { class: "small muted" });
@@ -180,9 +212,14 @@ async function localSection(): Promise<HTMLElement> {
     return h("tr", {},
       h("td", {}, m?.name ?? id),
       h("td", {}, ENGINE_LABELS[engine as EngineId] ?? engine),
-      h("td", {}, m?.sizeMB ? `~${m.sizeMB} MB` : "—"),
+      h("td", {}, m?.sizeMB ? `~${fmtSize(m.sizeMB)}` : "—"),
       h("td", {}, m ? h("button", { class: "danger", onclick: async () => { await send({ type: "admin", admin: { op: "deleteModel", model: m } }); render(); } }, "Delete") : null),
     );
+  });
+
+  const reasoning = h("input", {
+    type: "checkbox", checked: settings.local.reasoning,
+    onchange: (e) => save((s) => (s.local.reasoning = (e.target as HTMLInputElement).checked)),
   });
 
   const idle = h("input", {
@@ -193,14 +230,17 @@ async function localSection(): Promise<HTMLElement> {
   return section("local", "Local model",
     h("p", { class: "small muted" },
       `WebGPU: ${caps.webgpu ? `yes (max buffer ${caps.maxBufferMB} MB)` : "no — WebLLM unavailable; Transformers.js runs on WASM, wllama on CPU"} · `,
+      `large GGUF streaming (JSPI + Memory64): ${caps.jspi && caps.mem64 ? "yes" : "no"} · `,
       `cross-origin isolated: ${status?.crossOriginIsolated ? "yes (multi-threaded WASM)" : "no"} · `,
       `loaded: ${status?.loaded ? `${status.loaded.modelId} on ${ENGINE_LABELS[status.loaded.engine]}` : "none"}`),
     h("div", { class: "row" }, h("label", {}, "Model ", modelSel), h("label", {}, "Engine ", engineSel)),
+    modelInfo,
     h("div", { class: "row", style: "margin-top:10px" },
       h("button", { class: "primary", onclick: download }, "Download / load"),
       h("button", { onclick: async () => { await send({ type: "admin", admin: { op: "unload" } }); render(); } }, "Unload"),
       bar, msg),
     h("div", { class: "row", style: "margin-top:10px" }, h("label", {}, "Unload after idle (minutes) ", idle)),
+    h("div", { class: "row", style: "margin-top:10px" }, h("label", {}, reasoning, " Let reasoning models think (slower, better answers)")),
     h("p", { class: "small muted", style: "margin-top:10px" }, `Extension storage used: ${fmtMB(est.usage ?? 0)}. Weights are stored once and shared by every site.`),
     downloadedRows.length
       ? h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, ...["Downloaded model", "Engine", "Size", ""].map((t) => h("th", {}, t)))), h("tbody", {}, ...downloadedRows)))
@@ -280,6 +320,38 @@ async function cloudSection(): Promise<HTMLElement> {
   );
 }
 
+// ---- Playground tools ----------------------------------------------------------
+
+const TAVILY = "https://api.tavily.com/*";
+
+async function toolsSection(): Promise<HTMLElement> {
+  const ks = await keystoreStatus();
+  const saved = ks.providers.includes("tavily");
+  const granted = await chrome.permissions.contains({ origins: [TAVILY] });
+  const keyInput = h("input", { type: "password", placeholder: saved ? "•••••••• (saved)" : "Tavily API key", size: 26, autocomplete: "off" });
+  const msg = h("span", { class: "small muted" });
+  return section("tools", "Playground tools",
+    h("p", { class: "small muted" },
+      "The playground can give models the extension's own tools: browser automation, web search, and tools you write. Turn them on in the playground's Tools panel. ",
+      "These tools are never available to websites."),
+    h("h2", { style: "margin-top:12px" }, "Web search (Tavily)"),
+    h("p", { class: "small muted" }, "The web_search tool uses your Tavily key. It's stored with your other keys and sent only to api.tavily.com."),
+    h("div", { class: "row" }, keyInput,
+      h("button", { disabled: !ks.unlocked, onclick: async () => {
+        if (!keyInput.value) return;
+        // Ask for api.tavily.com while handling this click.
+        if (!granted && !(await chrome.permissions.request({ origins: [TAVILY] }))) return toast(msg, "Permission for api.tavily.com not granted");
+        await setKey("tavily", keyInput.value.trim());
+        keyInput.value = "";
+        toast(msg, "Saved");
+        render();
+      } }, "Save"),
+      saved ? h("button", { class: "danger", onclick: async () => { await deleteKey("tavily"); render(); } }, "Delete") : null,
+      msg),
+    saved && !granted ? h("p", { class: "small warn-text" }, "Saved, but access to api.tavily.com isn't granted yet; save the key again to grant it.") : null,
+  );
+}
+
 async function lockPanel(ks: Awaited<ReturnType<typeof keystoreStatus>>): Promise<HTMLElement> {
   const pass = h("input", { type: "password", placeholder: "Passphrase", autocomplete: "new-password" });
   const msg = h("span", { class: "small muted" });
@@ -346,12 +418,14 @@ async function usageSection(): Promise<HTMLElement> {
 
 async function render() {
   settings = await getSettings();
-  const parts = await Promise.all([sitesSection(), localSection(), cloudSection(), Promise.resolve(limitsSection()), usageSection()]);
+  const parts = await Promise.all([sitesSection(), localSection(), cloudSection(), toolsSection(), Promise.resolve(limitsSection()), usageSection()]);
   app.replaceChildren(
     h("header", {},
       h("h1", {}, "Local LLM"),
       h("p", { class: "muted" }, "Serves a language model to the websites you approve through the standard window.LanguageModel API."),
-      h("nav", {}, ...[["sites", "Sites"], ["local", "Local model"], ["cloud", "Cloud providers"], ["limits", "Limits"], ["usage", "Usage"]].map(([id, t]) => h("a", { href: `#${id}` }, t)))),
+      h("nav", {},
+        ...[["sites", "Sites"], ["local", "Local model"], ["cloud", "Cloud providers"], ["tools", "Tools"], ["limits", "Limits"], ["usage", "Usage"]].map(([id, t]) => h("a", { href: `#${id}` }, t)),
+        h("a", { href: "playground.html" }, "Playground →"))),
     ...parts,
   );
 }

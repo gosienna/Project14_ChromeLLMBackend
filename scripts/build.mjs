@@ -40,6 +40,9 @@ const iife = [
   { in: "src/bridge/bridge.ts", out: "bridge", define: {} },
   { in: "src/polyfill/polyfill.ts", out: "polyfill", define: { __OVERRIDE_NATIVE__: "false" } },
   { in: "src/polyfill/polyfill.ts", out: "polyfill-override", define: { __OVERRIDE_NATIVE__: "true" } },
+  // Injected into pages by the playground's browser tools, and the custom-tool sandbox page.
+  { in: "src/ui/tools/a11y-injected.ts", out: "ui/a11y-injected", define: {} },
+  { in: "src/ui/tool-sandbox.ts", out: "ui/tool-sandbox", define: {} },
 ].map((e) => ({
   ...common,
   entryPoints: [e.in],
@@ -57,6 +60,7 @@ const esm = {
     "ui/options": "src/ui/options.ts",
     "ui/popup": "src/ui/popup.ts",
     "ui/consent": "src/ui/consent.ts",
+    "ui/playground": "src/ui/playground.ts",
   },
   outdir: out,
   format: "esm",
@@ -77,7 +81,7 @@ function copyStatic() {
   writeFileSync(join(out, "manifest.json"), JSON.stringify(m, null, 2));
   cpSync(join(root, "src/icons"), join(out, "icons"), { recursive: true });
   cpSync(join(root, "src/offscreen/host.html"), join(out, "offscreen/host.html"));
-  for (const page of ["options", "popup", "consent"]) cpSync(join(root, `src/ui/${page}.html`), join(out, `ui/${page}.html`));
+  for (const page of ["options", "popup", "consent", "playground", "tool-sandbox"]) cpSync(join(root, `src/ui/${page}.html`), join(out, `ui/${page}.html`));
   cpSync(join(root, "src/ui/style.css"), join(out, "ui/style.css"));
 
   // Engine runtimes: served from the extension, never from a CDN.

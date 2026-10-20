@@ -2,7 +2,7 @@
 // It holds no model: only request ids and promise/stream bookkeeping. Requests travel to the
 // isolated-world relay (bridge.ts) over a MessageChannel set up with a per-page nonce.
 
-import type { ChatMessage, DistributiveOmit, ModelParams, PageRequest, PageResponse, SessionInfo, SessionOptions } from "../shared/protocol";
+import { MAX_TOOLS, TOOL_NAME, type ChatMessage, type DistributiveOmit, type ModelParams, type PageRequest, type PageResponse, type SessionInfo, type SessionOptions, type ToolDecl } from "../shared/protocol";
 
 declare const __OVERRIDE_NATIVE__: boolean;
 declare const __VERSION__: string;
@@ -13,7 +13,10 @@ type Pending = {
   onChunk?: (text: string) => void;
   onProgress?: (loaded: number) => void;
   onDone?: (inputUsage?: number) => void;
+  onToolCall?: (call: Extract<PageResponse, { kind: "tool-call" }>) => void;
 };
+
+type ToolFn = (args: Record<string, unknown>) => unknown;
 
 (() => {
   const w = window as unknown as Record<string, unknown>;
@@ -67,6 +70,9 @@ type Pending = {
         pending.delete(data.id);
         p.onDone?.(data.inputUsage);
         p.resolve(undefined);
+        break;
+      case "tool-call":
+        p.onToolCall?.(data);
         break;
     }
   }
@@ -145,22 +151,53 @@ type Pending = {
 
   // ---- LanguageModel -----------------------------------------------------
 
-  interface CreateOptions extends SessionOptions {
+  interface ToolOption {
+    name: string;
+    description?: string;
+    inputSchema?: Record<string, unknown>;
+    execute: ToolFn;
+  }
+
+  interface CreateOptions extends Omit<SessionOptions, "tools"> {
+    tools?: ToolOption[];
     signal?: AbortSignal;
     monitor?: (m: EventTarget) => void;
     expectedInputs?: Array<{ type: string }>;
     expectedOutputs?: Array<{ type: string }>;
   }
 
+  /** Split tools into declarations for the extension and execute() functions that stay here. */
+  function splitTools(tools: unknown): { decls: ToolDecl[]; fns: Map<string, ToolFn> } {
+    if (!Array.isArray(tools)) throw new TypeError("tools must be an array");
+    if (tools.length > MAX_TOOLS) throw new DOMException(`At most ${MAX_TOOLS} tools are supported`, "NotSupportedError");
+    const decls: ToolDecl[] = [];
+    const fns = new Map<string, ToolFn>();
+    for (const t of tools as ToolOption[]) {
+      if (!t || typeof t.name !== "string" || !TOOL_NAME.test(t.name)) throw new TypeError("Each tool needs a name of letters, digits, _ or -");
+      if (fns.has(t.name)) throw new TypeError(`Duplicate tool name: ${t.name}`);
+      if (typeof t.execute !== "function") throw new TypeError(`Tool ${t.name} needs an execute function`);
+      const schema = t.inputSchema ?? { type: "object", properties: {} };
+      // A JSON round trip drops anything that can't cross into the extension.
+      decls.push({ name: t.name, description: String(t.description ?? ""), inputSchema: JSON.parse(JSON.stringify(schema)) });
+      fns.set(t.name, t.execute);
+    }
+    return { decls, fns };
+  }
+
+  /** Largest tool result the extension accepts (protocol MAX_TEXT). */
+  const MAX_RESULT = 1_000_000;
+
   class LanguageModel extends EventTarget {
     #info: SessionInfo;
+    #tools: Map<string, ToolFn>;
     #destroyed = false;
     #controller = new AbortController();
     onquotaoverflow: ((e: Event) => void) | null = null;
 
-    private constructor(info: SessionInfo) {
+    private constructor(info: SessionInfo, tools: Map<string, ToolFn>) {
       super();
       this.#info = info;
+      this.#tools = tools;
       this.addEventListener("quotaoverflow", (e) => this.onquotaoverflow?.(e));
     }
 
@@ -188,12 +225,14 @@ type Pending = {
       if ((options.temperature === undefined) !== (options.topK === undefined)) {
         throw new DOMException("temperature and topK must be specified together", "NotSupportedError");
       }
+      const { decls, fns } = options.tools ? splitTools(options.tools) : { decls: [], fns: new Map<string, ToolFn>() };
+      if (decls.length) sessionOptions.tools = decls;
       const info = await request<SessionInfo>(
         { kind: "create", options: sessionOptions, monitor: typeof options.monitor === "function" },
         { onProgress: (loaded) => monitor.dispatchEvent(new ProgressEvent("downloadprogress", { loaded, total: 1 })) },
         options.signal,
       );
-      return new LanguageModel(info);
+      return new LanguageModel(info, fns);
     }
 
     get inputUsage() { return this.#info.inputUsage; }
@@ -215,13 +254,31 @@ type Pending = {
       if (typeof u === "number") this.#info.inputUsage = u;
     }
 
+    /** Run a tool the model called during prompt `target` and send the result back. */
+    async #runTool(target: string, call: Extract<PageResponse, { kind: "tool-call" }>) {
+      let result: string;
+      let isError = false;
+      try {
+        const fn = this.#tools.get(call.name);
+        if (!fn) throw new Error(`Unknown tool: ${call.name}`);
+        const value = await fn(call.arguments);
+        result = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
+      } catch (e) {
+        isError = true;
+        result = e instanceof Error ? e.message : String(e);
+      }
+      if (!pending.has(target)) return; // aborted while the tool ran
+      send({ kind: "tool-result", id: nextId(), target, callId: call.callId, result: result.slice(0, MAX_RESULT), isError });
+    }
+
     async prompt(input: PromptInput, options: { signal?: AbortSignal; responseConstraint?: unknown } = {}): Promise<string> {
       this.#check();
       if (options.responseConstraint !== undefined) throw new DOMException("responseConstraint is not supported yet", "NotSupportedError");
       let text = "";
+      const id = nextId();
       await request<void>(
-        { kind: "prompt", sessionId: this.#info.sessionId, input: normalize(input), stream: false },
-        { onChunk: (c) => (text += c), onDone: (u) => this.#setUsage(u) },
+        { kind: "prompt", id, sessionId: this.#info.sessionId, input: normalize(input), stream: false },
+        { onChunk: (c) => (text += c), onDone: (u) => this.#setUsage(u), onToolCall: (c) => void this.#runTool(id, c) },
         this.#signal(options.signal),
       );
       return text;
@@ -237,7 +294,7 @@ type Pending = {
         start: (controller) => {
           request<void>(
             { kind: "prompt", id, sessionId: this.#info.sessionId, input: messages, stream: true },
-            { onChunk: (c) => controller.enqueue(c), onDone: (u) => this.#setUsage(u) },
+            { onChunk: (c) => controller.enqueue(c), onDone: (u) => this.#setUsage(u), onToolCall: (c) => void this.#runTool(id, c) },
             signal,
           ).then(() => controller.close(), (e) => controller.error(e));
         },
@@ -266,7 +323,7 @@ type Pending = {
     async clone(options: { signal?: AbortSignal } = {}): Promise<LanguageModel> {
       this.#check();
       const info = await request<SessionInfo>({ kind: "clone", sessionId: this.#info.sessionId }, {}, this.#signal(options.signal));
-      return new LanguageModel(info);
+      return new LanguageModel(info, this.#tools);
     }
 
     destroy(): void {
@@ -282,7 +339,7 @@ type Pending = {
   const localLLM = Object.freeze({
     version: __VERSION__,
     overridesNative: hasNative,
-    info: () => request<{ name: string; backend: string; version: string }>({ kind: "info" }),
+    info: () => request<{ name: string; backend: string; images: boolean; tools: "native" | "prompted"; version: string }>({ kind: "info" }),
   });
   Object.defineProperty(window, "localLLM", { value: localLLM, writable: false, configurable: true });
   window.dispatchEvent(new Event("localllm:ready"));

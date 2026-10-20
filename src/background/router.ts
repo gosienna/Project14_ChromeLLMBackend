@@ -7,7 +7,15 @@ import { findModel } from "../shared/catalog";
 import { LLMError, toWireError } from "../shared/errors";
 import type { AdminOp, BackendSpec, FromHost, HostRequest } from "../shared/host-protocol";
 import { getKey } from "../shared/keystore";
-import { estimateMessageTokens, parsePageRequest, type PageRequest, type PageResponse } from "../shared/protocol";
+import {
+  estimateMessageTokens,
+  estimateTokens,
+  parsePageRequest,
+  type PageRequest,
+  type PageRequestKind,
+  type PageResponse,
+  type PlaygroundEnvelope,
+} from "../shared/protocol";
 import {
   appendUsage,
   defaultSite,
@@ -19,11 +27,12 @@ import {
   updateSite,
   type Settings,
   type SiteConfig,
+  type UsageEntry,
 } from "../shared/settings";
 import { askConsent, clearOnceGrants, getConsentRequest, hasOnceGrant, onWindowClosed, settle, type Decision } from "./consent";
 import { hostReady, onHostDisconnect, onHostMessage, sendToHost } from "./host-link";
 import { TokenRateLimiter, providerTokensThisMonth, siteTokensToday } from "./limits";
-import { consentAvailability, gate } from "./policy";
+import { consentAvailability, deliversTo, gate } from "./policy";
 import { isPermitted, syncRegistrations } from "./registration";
 
 declare const __TEST__: boolean;
@@ -65,26 +74,51 @@ function replyError(conn: PageConn, id: string, e: unknown) {
   reply(conn, { kind: "error", id, ...toWireError(e) });
 }
 
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== "llm-page") return;
-  const sender = port.sender;
-  // Trust only the browser-reported origin. Top frame only.
-  if (!sender?.origin || !sender.tab?.id || sender.frameId !== 0 || !/^https?:/.test(sender.origin)) {
-    port.disconnect();
-    return;
-  }
-  const conn: PageConn = { key: `c${bootId}${++connCounter}`, port, origin: sender.origin, tabId: sender.tab.id };
+function openConn(port: chrome.runtime.Port, origin: string, tabId: number, onMessage: (conn: PageConn, raw: unknown) => void) {
+  const conn: PageConn = { key: `c${bootId}${++connCounter}`, port, origin, tabId };
   conns.set(conn.key, conn);
-  port.onMessage.addListener((raw: BridgeEnvelope) => {
-    const req = parsePageRequest(raw?.req);
-    if (!req) return; // schema check again at the boundary
-    handlePageRequest(conn, req, raw.visible === true).catch((e) => replyError(conn, req.id, e));
-  });
+  port.onMessage.addListener((raw) => onMessage(conn, raw));
   port.onDisconnect.addListener(() => {
     conns.delete(conn.key);
     for (const [k, f] of inFlight) if (f.conn === conn) inFlight.delete(k);
     sendToHost({ type: "admin", rid: `release-${conn.key}`, admin: { op: "releaseOwner", owner: conn.key } }).catch(() => {});
   });
+}
+
+const PLAYGROUND_URL = chrome.runtime.getURL("ui/playground.html");
+const PLAYGROUND_ORIGIN = new URL(PLAYGROUND_URL).origin;
+const PLAYGROUND_KINDS = new Set<PageRequestKind>(["availability", "info", "create", "prompt", "destroy", "abort", "tool-result"]);
+
+chrome.runtime.onConnect.addListener((port) => {
+  const sender = port.sender;
+  if (port.name === "llm-page") {
+    // Trust only the browser-reported origin. Top frame only.
+    if (!sender?.origin || !sender.tab?.id || sender.frameId !== 0 || !/^https?:/.test(sender.origin)) {
+      port.disconnect();
+      return;
+    }
+    openConn(port, sender.origin, sender.tab.id, (conn, raw) => {
+      const env = raw as BridgeEnvelope;
+      const req = parsePageRequest(env?.req);
+      if (!req) return; // schema check again at the boundary
+      handlePageRequest(conn, req, env.visible === true).catch((e) => replyError(conn, req.id, e));
+    });
+  } else if (port.name === "llm-playground") {
+    // The extension's own playground tab only; content scripts report the page's URL and origin.
+    if (sender?.id !== chrome.runtime.id || !sender.url?.startsWith(PLAYGROUND_URL) || !sender.tab?.id) {
+      port.disconnect();
+      return;
+    }
+    openConn(port, PLAYGROUND_ORIGIN, sender.tab.id, (conn, raw) => {
+      const env = raw as PlaygroundEnvelope;
+      const req = parsePageRequest(env?.req, { images: true });
+      if (!req) return;
+      if (!PLAYGROUND_KINDS.has(req.kind) || typeof env.backend !== "string") {
+        return replyError(conn, req.id, new LLMError("NotSupportedError", `Unsupported playground request ${req.kind}`));
+      }
+      handlePlaygroundRequest(conn, req, env.backend).catch((e) => replyError(conn, req.id, e));
+    });
+  }
 });
 
 // ---- Backend resolution ---------------------------------------------------
@@ -92,7 +126,7 @@ chrome.runtime.onConnect.addListener((port) => {
 async function backendSpec(id: string, settings: Settings): Promise<BackendSpec> {
   if (id === "local") {
     const model = findModel(settings.local.modelId) ?? findModel("qwen2.5-0.5b-instruct")!;
-    return { kind: "local", model, engine: settings.local.enginePin[model.id] ?? "auto" };
+    return { kind: "local", model, engine: settings.local.enginePin[model.id] ?? "auto", reasoning: settings.local.reasoning };
   }
   const provider = findProvider(settings, id);
   const cfg = settings.providers[id];
@@ -130,6 +164,35 @@ function backendName(id: string, settings: Settings): string {
 
 // ---- Request handling -----------------------------------------------------
 
+const hostBase = (conn: PageConn, settings: Settings) => ({
+  type: "req" as const,
+  origin: conn.origin,
+  owner: conn.key,
+  limits: { maxSessions: settings.limits.maxSessions, maxContext: settings.limits.maxContext },
+  idleUnloadMinutes: settings.idleUnloadMinutes,
+});
+
+type HostBase = ReturnType<typeof hostBase>;
+
+async function abort(conn: PageConn, req: Extract<PageRequest, { kind: "abort" }>, base: HostBase) {
+  inFlight.delete(rid(conn, req.target));
+  await sendToHost({ ...base, rid: rid(conn, req.id), req: { ...req, target: rid(conn, req.target) } });
+}
+
+/** A tool result for one of this page's own prompts: the target is scoped to the connection like abort's. */
+async function toolResult(conn: PageConn, req: Extract<PageRequest, { kind: "tool-result" }>, base: HostBase) {
+  // The result becomes model input; count it against the site's per-minute budget.
+  limiter.record(conn.origin, estimateTokens(req.result));
+  await sendToHost({ ...base, rid: rid(conn, req.id), req: { ...req, target: rid(conn, req.target) } });
+}
+
+function checkProviderCap(usage: UsageEntry[], backend: string, est: number, settings: Settings) {
+  const cap = settings.providers[backend]?.monthlyTokenCap;
+  if (backend !== "local" && cap && providerTokensThisMonth(usage, backend, Date.now()) + est > cap) {
+    throw new LLMError("QuotaExceededError", `Monthly token cap for ${backendName(backend, settings)} reached`);
+  }
+}
+
 async function handlePageRequest(conn: PageConn, req: PageRequest, visible: boolean) {
   const { origin, tabId } = conn;
   const [site, permitted, onceGrant, settings] = await Promise.all([
@@ -142,19 +205,14 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
   const g = gate({ kind: req.kind, site, permitted, onceGrant, visible });
   if (g.action === "deny") throw new LLMError(g.name, g.message);
 
-  const base = {
-    type: "req" as const,
-    origin,
-    owner: conn.key,
-    limits: { maxSessions: settings.limits.maxSessions, maxContext: settings.limits.maxContext },
-    idleUnloadMinutes: settings.idleUnloadMinutes,
-  };
+  const base = hostBase(conn, settings);
 
   switch (req.kind) {
     case "abort":
-      inFlight.delete(rid(conn, req.target));
-      await sendToHost({ ...base, rid: rid(conn, req.id), req: { ...req, target: rid(conn, req.target) } });
-      return;
+      return abort(conn, req, base);
+
+    case "tool-result":
+      return toolResult(conn, req, base);
 
     case "availability": {
       const fixed = consentAvailability(site, permitted, onceGrant);
@@ -195,20 +253,40 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
         throw new LLMError("QuotaExceededError", "Per-minute token limit for this site reached; try again shortly");
       }
       const usage = await getUsage();
-      const now = Date.now();
       const s = site!;
-      if (siteTokensToday(usage, origin, now) + est > s.dailyTokenCap) {
+      if (siteTokensToday(usage, origin, Date.now()) + est > s.dailyTokenCap) {
         throw new LLMError("QuotaExceededError", "Daily token cap for this site reached");
       }
-      const backend = sessionBackends.get(req.sessionId) ?? s.backend;
-      const cap = settings.providers[backend]?.monthlyTokenCap;
-      if (backend !== "local" && cap && providerTokensThisMonth(usage, backend, now) + est > cap) {
-        throw new LLMError("QuotaExceededError", `Monthly token cap for ${backendName(backend, settings)} reached`);
-      }
+      checkProviderCap(usage, sessionBackends.get(req.sessionId) ?? s.backend, est, settings);
       limiter.record(origin, est);
       return forward(conn, req, base);
     }
 
+    default:
+      return forward(conn, req, base);
+  }
+}
+
+/**
+ * The playground is the extension's own UI, so it names the backend and skips the site consent
+ * gate and per-site limits. Keys stay here; provider spend caps still apply.
+ */
+async function handlePlaygroundRequest(conn: PageConn, req: PageRequest, backend: string) {
+  const settings = await getSettings();
+  // The playground shows raw requests and responses; web pages never get traces.
+  const base = { ...hostBase(conn, settings), trace: true };
+  switch (req.kind) {
+    case "availability":
+    case "info":
+    case "create":
+      return forward(conn, req, { ...base, backends: [{ id: backend, spec: await backendSpec(backend, settings) }] });
+    case "prompt":
+      checkProviderCap(await getUsage(), sessionBackends.get(req.sessionId) ?? backend, estimateMessageTokens(req.input), settings);
+      return forward(conn, req, base);
+    case "abort":
+      return abort(conn, req, base);
+    case "tool-result":
+      return toolResult(conn, req, base);
     default:
       return forward(conn, req, base);
   }
@@ -248,6 +326,7 @@ onHostMessage((msg: FromHost) => {
         if (info?.sessionId) sessionBackends.set(info.sessionId, msg.sessionBackend);
       }
       if (msg.res.kind === "result" || msg.res.kind === "error" || msg.res.kind === "done") inFlight.delete(msg.rid);
+      if (!deliversTo(msg.res.kind, f.conn.origin === PLAYGROUND_ORIGIN)) return;
       reply(f.conn, { ...msg.res, id: f.id });
       return;
     }
@@ -319,7 +398,8 @@ type UIMessage =
   | { type: "site:revoke"; origin: string }
   | { type: "site:reset-consent"; origin: string }
   | { type: "admin"; admin: AdminOp }
-  | { type: "sessions" };
+  | { type: "sessions" }
+  | { type: "tool:web_search"; args: { query?: unknown; max_results?: unknown } };
 
 chrome.runtime.onMessage.addListener((msg: UIMessage, sender, sendResponse) => {
   // Only extension pages (options, popup, consent, offscreen host) may use these.
@@ -348,8 +428,23 @@ chrome.runtime.onMessage.addListener((msg: UIMessage, sender, sendResponse) => {
     case "sessions":
       sendResponse({ ok: true, value: lastSessions });
       return;
+    case "tool:web_search":
+      return done(webSearch(msg.args));
   }
 });
+
+/** The playground's web_search tool: the key is read here and sent only to the host, which calls Tavily. */
+async function webSearch(args: { query?: unknown; max_results?: unknown }) {
+  const query = String(args?.query ?? "").trim();
+  if (!query) throw new Error("web_search requires a non-empty query");
+  const apiKey = await getKey("tavily");
+  if (!apiKey) throw new Error("No Tavily API key — add one in the extension's options under Tools");
+  if (!(await chrome.permissions.contains({ origins: ["https://api.tavily.com/*"] }))) {
+    throw new Error("Permission to reach api.tavily.com has not been granted (options → Tools)");
+  }
+  const maxResults = Math.min(10, Math.max(1, Number(args?.max_results) || 5));
+  return admin({ op: "webSearch", apiKey, query, maxResults });
+}
 
 // ---- Lifecycle ------------------------------------------------------------
 

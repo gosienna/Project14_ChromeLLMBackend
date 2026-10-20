@@ -1,13 +1,14 @@
 // Cloud backend: same Backend contract as local engines, using the user's own API key.
 
 import type { BackendSpec } from "../shared/host-protocol";
-import { estimateMessageTokens, type ChatMessage, type ModelParams, type Usage } from "../shared/protocol";
+import { estimateMessageTokens, type ChatMessage, type ModelParams } from "../shared/protocol";
 import type { AdapterKind } from "../shared/providers";
 import { anthropicAdapter } from "./adapters/anthropic";
 import { geminiAdapter } from "./adapters/gemini";
 import { openAICompatAdapter } from "./adapters/openai-compat";
 import type { Adapter } from "./adapters/types";
-import type { Backend, GenerateOptions } from "./backend";
+import type { Backend, GenerateOptions, GenerateResult } from "./backend";
+import { tracedAdapter } from "./trace";
 
 const ADAPTERS: Record<AdapterKind, Adapter> = {
   anthropic: anthropicAdapter,
@@ -39,6 +40,14 @@ export class CloudBackend implements Backend {
     return CLOUD_CONTEXT;
   }
 
+  acceptsImages() {
+    return true;
+  }
+
+  toolMode() {
+    return "native" as const;
+  }
+
   params(): ModelParams {
     return { defaultTopK: 40, maxTopK: 128, defaultTemperature: 1, maxTemperature: 2 };
   }
@@ -47,8 +56,8 @@ export class CloudBackend implements Backend {
     return estimateMessageTokens(messages);
   }
 
-  generate(messages: ChatMessage[], opts: GenerateOptions, signal: AbortSignal): AsyncGenerator<string, Usage> {
+  generate(messages: ChatMessage[], opts: GenerateOptions, signal: AbortSignal): AsyncGenerator<string, GenerateResult> {
     const { provider, model, apiKey } = this.spec;
-    return ADAPTERS[provider.adapter]({ provider, model, apiKey }, messages, opts, signal);
+    return tracedAdapter(ADAPTERS[provider.adapter], provider.id)({ provider, model, apiKey }, messages, opts, signal);
   }
 }

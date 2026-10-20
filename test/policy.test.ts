@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { consentAvailability, gate } from "../src/background/policy";
+import { consentAvailability, deliversTo, gate } from "../src/background/policy";
 import { defaultSite } from "../src/shared/settings";
 
 const site = (consent?: "always" | "deny") => ({ ...defaultSite("https://app.example.com"), consent });
@@ -42,4 +42,12 @@ describe("consentAvailability", () => {
     expect(consentAvailability(site("always"), true, false)).toBeNull();
     expect(consentAvailability(site(), true, true)).toBeNull();
   });
+});
+
+describe("deliversTo", () => {
+  it("keeps reasoning out of pages", () => {
+    expect(deliversTo("reasoning", false)).toBe(false);
+    expect(deliversTo("chunk", false)).toBe(true);
+  });
+  it("sends reasoning to the playground", () => expect(deliversTo("reasoning", true)).toBe(true));
 });

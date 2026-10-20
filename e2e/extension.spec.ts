@@ -22,6 +22,8 @@ test("prompt API round trip through the relay chain", async ({ context, sw }) =>
       monitor(m: EventTarget) { m.addEventListener("downloadprogress", (e) => progress.push((e as ProgressEvent).loaded)); },
     });
     const first = await s.prompt("hello world");
+    // The echo engine emits reasoning for "/think"; pages get the answer only.
+    const thought = await s.prompt("/think x");
     let streamed = "";
     for await (const chunk of s.promptStreaming("again")) streamed += chunk;
     const usage = await s.measureInputUsage("abcd efgh");
@@ -31,7 +33,7 @@ test("prompt API round trip through the relay chain", async ({ context, sw }) =>
     s.destroy();
     let destroyedError = "";
     try { await s.prompt("x"); } catch (e) { destroyedError = (e as DOMException).name; }
-    return { availability, params, progress, first, streamed, usage, cloned, info, destroyedError, inputUsage: clone.inputUsage, quota: clone.inputQuota };
+    return { availability, params, progress, first, thought, streamed, usage, cloned, info, destroyedError, inputUsage: clone.inputUsage, quota: clone.inputQuota };
   });
 
   expect(result.availability).toBe("available");
@@ -39,9 +41,10 @@ test("prompt API round trip through the relay chain", async ({ context, sw }) =>
   expect(result.progress).toContain(0);
   expect(result.progress).toContain(1);
   expect(result.first).toBe("Echo #1: hello world");
-  expect(result.streamed).toBe("Echo #2: again");
+  expect(result.thought).toBe("Echo #2: /think x");
+  expect(result.streamed).toBe("Echo #3: again");
   expect(result.usage).toBeGreaterThan(0);
-  expect(result.cloned).toBe("Echo #3: from clone");
+  expect(result.cloned).toBe("Echo #4: from clone");
   expect(result.info.backend).toBe("dummy");
   expect(result.destroyedError).toBe("InvalidStateError");
   expect(result.inputUsage).toBeGreaterThan(0);

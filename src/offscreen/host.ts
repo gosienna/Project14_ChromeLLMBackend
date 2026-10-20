@@ -4,10 +4,12 @@
 
 import { toWireError, LLMError } from "../shared/errors";
 import type { AdminOp, BackendSpec, FromHost, HostRequest, HostStatus, ToHost } from "../shared/host-protocol";
-import { randomId, type ChatMessage, type DistributiveOmit, type PageResponse, type SessionInfo } from "../shared/protocol";
+import { randomId, type ChatMessage, type DistributiveOmit, type PageResponse, type SessionInfo, type ToolCall, type ToolDecl, type Usage } from "../shared/protocol";
 import type { Backend } from "./backend";
 import { CloudBackend } from "./cloud-backend";
 import { LocalBackend, LocalRuntime } from "./local-runtime";
+import { withTools } from "./tools/with-tools";
+import { sanitizeTrace } from "./trace";
 
 declare const __VERSION__: string;
 
@@ -18,6 +20,8 @@ interface Session {
   backendId: string;
   backend: Backend;
   history: ChatMessage[];
+  /** Tools the page declared at create(); their execute() functions stay in the page. */
+  tools?: ToolDecl[];
   temperature: number;
   topK: number;
   quota: number;
@@ -28,8 +32,12 @@ interface Session {
 }
 
 const runtime = new LocalRuntime();
-const capsReady = runtime.probe();
+const capsReady = runtime.migrateStorage().catch(() => {}).then(() => runtime.probe());
 const sessions = new Map<string, Session>();
+/** Tool calls waiting for the page's result, keyed `${prompt rid}:${callId}`. */
+const toolWaiters = new Map<string, { origin: string; resolve: (r: { result: string; isError: boolean }) => void }>();
+/** Rounds of tool calls per prompt; the round after the last gets no tools, so the model answers. */
+const MAX_TOOL_ROUNDS = 8;
 const running = new Map<string, AbortController>();
 let port: chrome.runtime.Port | null = null;
 let busy = 0;
@@ -59,7 +67,7 @@ setInterval(() => {
 }, 20_000);
 
 function makeBackend(spec: BackendSpec, idleMinutes: number): Backend {
-  return spec.kind === "local" ? new LocalBackend(runtime, spec.model, spec.engine, idleMinutes) : new CloudBackend(spec);
+  return spec.kind === "local" ? new LocalBackend(runtime, spec.model, spec.engine, idleMinutes, spec.reasoning) : new CloudBackend(spec);
 }
 
 async function pickBackend(req: HostRequest): Promise<{ id: string; backend: Backend } | null> {
@@ -80,6 +88,12 @@ function getSession(req: HostRequest, sessionId: string): Session {
   return s;
 }
 
+function checkImages(s: Session, input: ChatMessage[]) {
+  if (input.some((m) => m.images?.length) && !s.backend.acceptsImages()) {
+    throw new LLMError("NotSupportedError", `${s.backend.describe().name} does not accept images`);
+  }
+}
+
 const info = (s: Session): SessionInfo => ({ sessionId: s.id, temperature: s.temperature, topK: s.topK, inputUsage: s.usage, inputQuota: s.quota });
 
 function destroySession(s: Session) {
@@ -87,17 +101,47 @@ function destroySession(s: Session) {
   sessions.delete(s.id);
 }
 
-/** Drop the oldest non-system turns until the conversation fits the quota. */
-async function fitToQuota(s: Session, messages: ChatMessage[]): Promise<{ messages: ChatMessage[]; tokens: number }> {
+/**
+ * Drop the oldest non-system turns until the conversation fits the quota. Turns from `keepFrom`
+ * on are never dropped (by default the newest). A tool call goes together with its results, so
+ * no result is left without the call it answers.
+ */
+async function fitToQuota(s: Session, messages: ChatMessage[], keepFrom = messages.length - 1): Promise<{ messages: ChatMessage[]; tokens: number }> {
   let msgs = messages;
   let tokens = await s.backend.countTokens(msgs);
   while (tokens > s.quota) {
-    const i = msgs.findIndex((m, idx) => m.role !== "system" && idx < msgs.length - 1);
+    const i = msgs.findIndex((m, idx) => m.role !== "system" && idx < keepFrom - (messages.length - msgs.length));
     if (i < 0) throw new LLMError("QuotaExceededError", `Input (${tokens} tokens) exceeds the session quota (${s.quota})`);
-    msgs = msgs.filter((_, idx) => idx !== i);
+    let n = 1;
+    while (msgs[i + n]?.role === "tool") n++;
+    msgs = [...msgs.slice(0, i), ...msgs.slice(i + n)];
     tokens = await s.backend.countTokens(msgs);
   }
   return { messages: msgs, tokens };
+}
+
+/** Ask the page to run a tool and wait for its result, or for the prompt to be aborted. */
+function callTool(rid: string, origin: string, call: ToolCall, signal: AbortSignal): Promise<string> {
+  // The page sees a host-made id: provider ids vary in format, and the page never needs them.
+  const callId = randomId();
+  const key = `${rid}:${callId}`;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      toolWaiters.delete(key);
+      reject(new LLMError("AbortError", "Aborted"));
+    };
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    toolWaiters.set(key, {
+      origin,
+      resolve: ({ result, isError }) => {
+        signal.removeEventListener("abort", onAbort);
+        toolWaiters.delete(key);
+        resolve(isError ? `Error: ${result}` : result);
+      },
+    });
+    respond(rid, { kind: "tool-call", callId, name: call.name, arguments: call.arguments });
+  });
 }
 
 async function handle(req: HostRequest): Promise<void> {
@@ -116,7 +160,10 @@ async function handle(req: HostRequest): Promise<void> {
     case "info": {
       const picked = await pickBackend(req);
       const d = picked?.backend.describe() ?? { name: "none", backend: "unavailable" };
-      return respond(rid, { kind: "result", value: { ...d, version: __VERSION__ } });
+      return respond(rid, {
+        kind: "result",
+        value: { ...d, images: picked?.backend.acceptsImages() ?? false, tools: picked?.backend.toolMode() ?? "prompted", version: __VERSION__ },
+      });
     }
     case "create": {
       if ((sessionCounts()[req.origin] ?? 0) >= req.limits.maxSessions) {
@@ -138,13 +185,15 @@ async function handle(req: HostRequest): Promise<void> {
       if (controller.signal.aborted) throw new LLMError("AbortError", "Aborted");
       const p = backend.params();
       const history = r.options.initialPrompts ?? [];
+      const tools = r.options.tools?.length ? r.options.tools : undefined;
       const s: Session = {
         id: randomId(),
         origin: req.origin,
         owner: req.owner,
         backendId: picked.id,
-        backend,
+        backend: tools ? withTools(backend) : backend,
         history,
+        tools,
         temperature: r.options.temperature ?? p.defaultTemperature,
         topK: Math.min(r.options.topK ?? p.defaultTopK, p.maxTopK),
         quota: Math.min(backend.contextWindow(), req.limits.maxContext),
@@ -169,23 +218,54 @@ async function handle(req: HostRequest): Promise<void> {
     }
     case "prompt": {
       const s = getSession(req, r.sessionId);
+      checkImages(s, r.input);
       const controller = new AbortController();
       running.set(rid, controller);
       s.running.add(controller);
       const run = async () => {
         if (controller.signal.aborted) throw new LLMError("AbortError", "Aborted");
-        const { messages, tokens } = await fitToQuota(s, [...s.history, ...r.input]);
-        const gen = s.backend.generate(messages, { temperature: s.temperature, topK: s.topK, maxTokens: Math.max(16, s.quota - tokens) }, controller.signal);
-        let out = "";
-        let step = await gen.next();
-        while (!step.done) {
-          out += step.value;
-          respond(rid, { kind: "chunk", text: step.value });
-          step = await gen.next();
+        let working = [...s.history, ...r.input];
+        // The prompt's last message and the tool rounds after it are never trimmed.
+        let keepFrom = working.length - 1;
+        const usage: Usage = { inputTokens: 0, outputTokens: 0 };
+        let used = 0;
+        // Generate; while the model calls tools, have the page run them and generate again.
+        for (let round = 0; ; round++) {
+          const before = working.length;
+          const { messages, tokens } = await fitToQuota(s, working, keepFrom);
+          keepFrom -= before - messages.length;
+          const offered = s.tools && round < MAX_TOOL_ROUNDS ? s.tools : undefined;
+          const gen = s.backend.generate(
+            messages,
+            {
+              temperature: s.temperature,
+              topK: s.topK,
+              maxTokens: Math.max(16, s.quota - tokens),
+              onReasoning: (text) => respond(rid, { kind: "reasoning", text }),
+              tools: offered,
+              ...(req.trace ? { onTrace: (t) => respond(rid, { kind: "trace", round, trace: sanitizeTrace(t) as typeof t }) } : {}),
+            },
+            controller.signal,
+          );
+          let out = "";
+          let step = await gen.next();
+          while (!step.done) {
+            out += step.value;
+            respond(rid, { kind: "chunk", text: step.value });
+            step = await gen.next();
+          }
+          const result = step.value;
+          usage.inputTokens += result.inputTokens;
+          usage.outputTokens += result.outputTokens;
+          used = tokens + result.outputTokens;
+          const calls = offered ? (result.toolCalls ?? []) : [];
+          working = [...messages, { role: "assistant", content: out, ...(calls.length ? { toolCalls: calls } : {}) }];
+          if (!calls.length) break;
+          const results = await Promise.all(calls.map((c) => callTool(rid, s.origin, c, controller.signal)));
+          working.push(...calls.map((c, i): ChatMessage => ({ role: "tool", toolCallId: c.id, name: c.name, content: results[i] })));
         }
-        const usage = step.value;
-        s.history = [...messages, { role: "assistant", content: out }];
-        s.usage = tokens + usage.outputTokens;
+        s.history = working;
+        s.usage = used;
         respond(rid, { kind: "done", inputUsage: s.usage }, { usage: { ...usage, origin: s.origin, backendId: s.backendId } });
       };
       const p = s.chain.then(run, run);
@@ -200,6 +280,7 @@ async function handle(req: HostRequest): Promise<void> {
     }
     case "append": {
       const s = getSession(req, r.sessionId);
+      checkImages(s, r.input);
       const { messages, tokens } = await fitToQuota(s, [...s.history, ...r.input]);
       s.history = messages;
       s.usage = tokens;
@@ -220,6 +301,11 @@ async function handle(req: HostRequest): Promise<void> {
     case "abort":
       running.get(r.target)?.abort();
       return;
+    case "tool-result": {
+      const w = toolWaiters.get(`${r.target}:${r.callId}`);
+      if (w?.origin === req.origin) w.resolve(r);
+      return;
+    }
   }
 }
 
@@ -256,11 +342,25 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
       for (const s of [...sessions.values()]) if (s.origin === op.origin) destroySession(s);
       sessionsChanged();
       return null;
+    case "webSearch":
+      return tavilySearch(op.apiKey, op.query, op.maxResults);
     case "releaseOwner":
       for (const s of [...sessions.values()]) if (s.owner === op.owner) destroySession(s);
       sessionsChanged();
       return null;
   }
+}
+
+/** Tavily Search, basic depth (1 credit). Ported from Project05's web_search tool. */
+async function tavilySearch(apiKey: string, query: string, maxResults: number) {
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ query, search_depth: "basic", max_results: maxResults, include_answer: false }),
+  });
+  const body = (await res.json().catch(() => null)) as { query?: string; results?: Array<{ title: string; url: string; content: string; score?: number }>; detail?: unknown; error?: unknown } | null;
+  if (!res.ok) throw new Error(`Tavily: ${JSON.stringify(body?.detail ?? body?.error ?? res.status)}`);
+  return { query: body?.query ?? query, results: (body?.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: r.content, score: r.score ?? null })) };
 }
 
 chrome.runtime.onConnect.addListener((p) => {

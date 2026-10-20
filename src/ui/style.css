@@ -68,3 +68,91 @@ progress { width: 200px; }
 .consent .origin { font-weight: 600; word-break: break-all; }
 .consent .actions { display: grid; gap: 8px; margin-top: 16px; }
 .consent .actions button { padding: 9px 12px; }
+
+/* Playground */
+/* The transcript always keeps room; open panels scroll inside their own caps instead of squeezing it. */
+.playground { max-width: 860px; height: 100vh; height: 100dvh; margin: 0 auto; padding: 16px; display: grid; grid-template-rows: auto minmax(200px, 1fr) auto; gap: 12px; }
+.pg-head { display: grid; gap: 8px; }
+.pg-head h1 { margin: 0; }
+.pg-head a { color: var(--accent); }
+.pg-head select { max-width: 100%; }
+.pg-spacer { flex: 1; }
+textarea { font: inherit; width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); resize: vertical; }
+.pg-log { overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; min-height: 0; }
+.pg-empty { margin: auto; text-align: center; max-width: 380px; }
+.pg-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; display: grid; gap: 8px; overflow-wrap: anywhere; }
+.pg-user { align-self: flex-end; background: var(--accent); color: var(--accent-fg); border-bottom-right-radius: 4px; }
+.pg-assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.pg-text { white-space: pre-wrap; }
+.pg-thinking summary { cursor: pointer; }
+.pg-thinking .pg-text { margin-top: 6px; padding-left: 10px; border-left: 2px solid currentColor; opacity: 0.85; }
+.pg-pending > .pg-text::after { content: "▍"; opacity: 0.6; animation: pg-blink 1s steps(2) infinite; }
+@keyframes pg-blink { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pg-pending > .pg-text::after { animation: none; } }
+.pg-images { display: flex; flex-wrap: wrap; gap: 6px; }
+.pg-images img { max-width: 220px; max-height: 220px; border-radius: 8px; display: block; }
+.pg-composer { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: var(--panel); }
+.pg-composer textarea { background: var(--bg); }
+.pg-tray { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pg-tray[hidden] { display: none; }
+.pg-tray .warn { flex-basis: 100%; margin: 0; }
+.pg-thumb { position: relative; margin: 0; }
+.pg-thumb img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.pg-remove { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; border-radius: 50%; line-height: 1; font-size: 14px; }
+.pg-note { color: var(--danger); }
+.popup .actions { display: grid; gap: 6px; margin-top: 12px; }
+
+/* Playground: raw views, tool calls, Tools panel */
+.warn-text { color: var(--danger); }
+button.pg-link { background: none; border: none; padding: 2px 4px; color: var(--accent); }
+button.pg-link:hover { text-decoration: underline; }
+.pg-notice { align-self: center; margin: 4px 0; }
+.pg-reply-meta { gap: 4px; }
+.pg-raw { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--bg); display: grid; gap: 8px; min-width: 0; }
+.pg-raw[hidden] { display: none; }
+.pg-pending-raw { margin-bottom: 8px; max-height: 30vh; overflow: auto; }
+.pg-raw-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.pg-raw-tabs[hidden] { display: none; }
+/* A reply with its raw view open uses the full width. */
+.pg-msg:has(> .pg-raw:not([hidden])) { width: 85%; }
+.pg-raw-tab { padding: 2px 8px; font-size: 12px; }
+.pg-raw-tab.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.pg-raw-section h4 { margin: 0 0 4px; font-weight: 600; }
+.pg-raw-body { display: grid; gap: 10px; min-width: 0; }
+.pg-prompt, .pg-tool-args, .pg-tool-result { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.4 ui-monospace, monospace; background: var(--panel); border-radius: 6px; padding: 6px 8px; max-height: 320px; overflow: auto; }
+.pg-json-edit, .pg-code { width: 100%; font: 12px/1.4 ui-monospace, monospace; }
+.pg-tree { font: 12px/1.5 ui-monospace, monospace; max-height: 420px; overflow: auto; min-width: 0; }
+.jt-row { cursor: pointer; border-radius: 4px; }
+.jt-row:hover, .jt-row:focus-visible { background: var(--panel); outline: none; }
+.jt-chevron { display: inline-block; width: 1em; color: var(--muted); }
+.jt-key { color: var(--muted); }
+.jt-preview { color: var(--muted); }
+.jt-children { padding-left: 14px; border-left: 1px solid var(--line); margin-left: 5px; }
+.jt-node.collapsed > .jt-children { display: none; }
+.jt-leaf { padding-left: 1em; overflow-wrap: anywhere; }
+.jt-string { color: #2b8a3e; }
+.jt-number, .jt-boolean { color: #1c7ed6; }
+.jt-null, .jt-undefined { color: var(--muted); }
+.jt-block { display: block; white-space: pre-wrap; padding-left: 1em; }
+.jt-role { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+.jt-role-system { color: #ae3ec9; }
+.jt-role-user { color: var(--accent); }
+.jt-role-assistant { color: #2b8a3e; }
+.jt-role-tool { color: #e8590c; }
+@media (prefers-color-scheme: dark) {
+  .jt-string, .jt-role-assistant { color: #8ce99a; }
+  .jt-number, .jt-boolean { color: #74c0fc; }
+  .jt-role-system { color: #e599f7; }
+  .jt-role-tool { color: #ffa94d; }
+}
+.pg-toolcall { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; display: grid; gap: 6px; }
+.pg-toolcall summary { cursor: pointer; }
+.pg-tools-box > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.pg-tools { margin-top: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; max-height: 30vh; overflow: auto; }
+.pg-tool-group h3 { font-size: 13px; margin: 0; }
+.pg-tool-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pg-tool { border-top: 1px solid var(--line); padding-top: 6px; }
+.pg-tool-desc { margin: 2px 0 0 24px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pg-tool-editor { margin: 6px 0 4px 24px; padding: 8px; background: var(--panel); border-radius: 8px; }
+.pg-param { flex-wrap: wrap; gap: 4px; }
+.pg-param input:not([type]) { min-width: 0; flex: 1 1 100px; }

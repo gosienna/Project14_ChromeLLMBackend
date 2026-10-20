@@ -1,7 +1,7 @@
 import { abortError, httpError, LLMError } from "../../shared/errors";
-import type { ChatMessage, Usage } from "../../shared/protocol";
+import type { ChatMessage, ImageInput } from "../../shared/protocol";
 import type { ProviderDef } from "../../shared/providers";
-import type { GenerateOptions } from "../backend";
+import type { GenerateOptions, GenerateResult } from "../backend";
 
 export interface AdapterConfig {
   provider: ProviderDef;
@@ -9,14 +9,14 @@ export interface AdapterConfig {
   apiKey: string;
 }
 
-/** Provider adapter: Prompt API messages in, text deltas out, usage returned. */
+/** Provider adapter: Prompt API messages in, text deltas out, usage and tool calls returned. */
 export type Adapter = (
   cfg: AdapterConfig,
   messages: ChatMessage[],
   opts: GenerateOptions,
   signal: AbortSignal,
   fetchImpl?: typeof fetch,
-) => AsyncGenerator<string, Usage>;
+) => AsyncGenerator<string, GenerateResult>;
 
 export async function post(fetchImpl: typeof fetch, url: string, headers: Record<string, string>, body: unknown, signal: AbortSignal): Promise<Response> {
   let res: Response;
@@ -35,6 +35,8 @@ export function splitSystem(messages: ChatMessage[]): { system: string; rest: Ch
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
   return { system, rest: messages.filter((m) => m.role !== "system") };
 }
+
+export const dataUrl = (img: ImageInput) => `data:${img.mimeType};base64,${img.data}`;
 
 /** Wrap the adapter's stream so aborts surface as AbortError rather than fetch internals. */
 export async function* guard<R>(signal: AbortSignal, gen: AsyncGenerator<string, R>): AsyncGenerator<string, R> {

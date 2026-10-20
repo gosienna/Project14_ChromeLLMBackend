@@ -19,13 +19,14 @@ MV3 Chrome extension exposing a local or user-keyed cloud LLM to user-approved s
 - `src/background/` — service worker. `router.ts` is the trust boundary; `policy.ts` (consent gate) and `limits.ts` (rate limits, spend caps) are pure and unit-tested; `registration.ts` registers content scripts only for enabled, permitted origins; `host-link.ts` manages the offscreen document.
 - `src/offscreen/` — the host: sessions, FIFO generation queue, `LocalRuntime` (one loaded model, idle unload), engines in `engines/`, cloud adapters in `adapters/`. Every backend implements `Backend` in `backend.ts`.
 - `src/shared/` — protocol + validators, host protocol, settings/storage schema, catalog, providers, keystore, errors.
-- `src/ui/` — options, popup, consent dialog (vanilla TS + `dom.ts` helper).
+- `src/ui/` — options, popup, consent dialog, playground (chat + image input) (vanilla TS + `dom.ts` helper). `ui/playground/` holds the raw I/O views (`raw.ts`, `payload.ts`) and the Tools panel; `ui/tools/` the playground-only extension tools: registry in IndexedDB (`registry.ts`), built-ins ported from Project05 (`builtin.ts`, `browser.ts`, `console.ts`, `a11y-injected.ts`), registry tools (`meta.ts`) and the runner (`run.ts`) that executes custom tool code in the sandbox page `ui/tool-sandbox.html`.
 - `packages/web/` — `@local-llm/web` detection/fallback helper.
 - `demo/` — public conformance page.
 
 ## Rules that matter
 
-- Trust only `port.sender.origin` in the router. Never read an origin, backend, model or key from a page message. `parsePageRequest` rejects unknown kinds and extra fields — keep it strict when adding fields.
+- Trust only `port.sender.origin` in the router. Never read an origin, backend, model or key from a page message. `parsePageRequest` rejects unknown kinds and extra fields — keep it strict when adding fields. The one exception is the `llm-playground` port: it's accepted only from `ui/playground.html` and may name the backend and attach images; only it receives `trace` (raw request/response) and `reasoning` responses (`policy.ts` `deliversTo`).
+- The extension's own tools (browser automation, web search, custom code, registry tools) exist only in the playground and run there; web pages only ever get the tools they declare themselves. Their permissions are optional (`downloads`, `debugger`, `<all_urls>`, `api.tavily.com`) and requested from the click that enables them. Custom tool code runs only in the manifest sandbox page (opaque origin, no extension APIs); keep it that way. The Tavily key follows the key rule: router reads it, the offscreen host calls Tavily.
 - Pages get model output only. Keys never leave `chrome.storage.local` except to the offscreen host for a provider call; never log prompts or keys (usage log holds origin, time, backend, token counts).
 - Offscreen documents only have `chrome.runtime` messaging (no `storage`, `getManifest`, `tabs`…). Anything the host needs comes from the router in the request.
 - New sites default to the local backend only. Never fall back to cloud unless the user allowed it for that site.

@@ -48,7 +48,7 @@ session.destroy();
 | `prompt()`, `promptStreaming()` | Yes | Streaming over a port; `AbortSignal` supported |
 | `measureInputUsage()`, `contextWindow` | Yes | From the active model's tokenizer |
 | Structured output (`responseConstraint`) | v2 | JSON-schema constrained decoding |
-| Tool calling | v2 | Under `window.localLLM.tools`, not the standard namespace |
+| Tool calling | Yes (shipped early) | Standard `LanguageModel.create({ tools })` shape, matching Chrome's native API rather than `window.localLLM.tools`; native per backend where available, prompted otherwise |
 
 **Injection rule:** if a native `LanguageModel` already exists, leave it alone unless the user enables "override native" in settings. Expose `window.localLLM.info()` for model name, backend and version.
 
