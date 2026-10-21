@@ -45,6 +45,8 @@ export type AdminOp =
   | { op: "unload" }
   | { op: "revokeOrigin"; origin: string }
   | { op: "releaseOwner"; owner: string }
+  /** Abort every in-flight request, or only one origin's. Resolves to the number aborted. */
+  | { op: "stop"; origin?: string }
   /** The playground's web_search tool. The router adds the key; the page never sees it. */
   | { op: "webSearch"; apiKey: string; query: string; maxResults: number };
 
@@ -56,6 +58,8 @@ export interface HostStatus {
   /** Chrome's built-in Prompt API is present in the host. */
   nano: boolean;
   sessions: Record<string, number>;
+  /** In-flight requests per origin, including ones queued for the local model. */
+  running: Record<string, number>;
   crossOriginIsolated: boolean;
 }
 

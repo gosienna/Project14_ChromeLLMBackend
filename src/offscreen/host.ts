@@ -39,7 +39,8 @@ const sessions = new Map<string, Session>();
 const toolWaiters = new Map<string, { origin: string; resolve: (r: { result: string; isError: boolean }) => void }>();
 /** Rounds of tool calls per prompt; the round after the last gets no tools, so the model answers. */
 const MAX_TOOL_ROUNDS = 8;
-const running = new Map<string, AbortController>();
+/** In-flight requests by rid, with the origin that made them (for the popup's Force stop). */
+const running = new Map<string, { controller: AbortController; origin: string }>();
 let port: chrome.runtime.Port | null = null;
 let busy = 0;
 
@@ -98,6 +99,12 @@ function checkImages(s: Session, input: ChatMessage[]) {
 }
 
 const info = (s: Session): SessionInfo => ({ sessionId: s.id, temperature: s.temperature, topK: s.topK, inputUsage: s.usage, inputQuota: s.quota });
+
+function runningCounts(): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const { origin } of running.values()) counts[origin] = (counts[origin] ?? 0) + 1;
+  return counts;
+}
 
 function destroySession(s: Session) {
   for (const c of s.running) c.abort();
@@ -176,7 +183,7 @@ async function handle(req: HostRequest): Promise<void> {
       if (!picked) throw new LLMError("NotSupportedError", "The model is unavailable on this device");
       const { backend } = picked;
       const controller = new AbortController();
-      running.set(rid, controller);
+      running.set(rid, { controller, origin: req.origin });
       try {
         const progress = (f: number) => r.monitor && respond(rid, { kind: "progress", loaded: f });
         progress(0);
@@ -223,7 +230,7 @@ async function handle(req: HostRequest): Promise<void> {
       const s = getSession(req, r.sessionId);
       checkImages(s, r.input);
       const controller = new AbortController();
-      running.set(rid, controller);
+      running.set(rid, { controller, origin: req.origin });
       s.running.add(controller);
       const run = async () => {
         if (controller.signal.aborted) throw new LLMError("AbortError", "Aborted");
@@ -302,7 +309,7 @@ async function handle(req: HostRequest): Promise<void> {
       return;
     }
     case "abort":
-      running.get(r.target)?.abort();
+      running.get(r.target)?.controller.abort();
       return;
     case "tool-result": {
       const w = toolWaiters.get(`${r.target}:${r.callId}`);
@@ -323,6 +330,7 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
         downloaded: runtime.downloaded(),
         nano: nanoSupported(),
         sessions: sessionCounts(),
+        running: runningCounts(),
         crossOriginIsolated: self.crossOriginIsolated,
       };
       return status;
@@ -348,6 +356,16 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
       return null;
     case "webSearch":
       return tavilySearch(op.apiKey, op.query, op.maxResults);
+    case "stop": {
+      // The user's Force stop: abort in-flight and queued requests, even ones whose page is stuck.
+      let stopped = 0;
+      for (const { controller, origin } of running.values()) {
+        if (op.origin && origin !== op.origin) continue;
+        controller.abort();
+        stopped++;
+      }
+      return stopped;
+    }
     case "releaseOwner":
       for (const s of [...sessions.values()]) if (s.owner === op.owner) destroySession(s);
       sessionsChanged();

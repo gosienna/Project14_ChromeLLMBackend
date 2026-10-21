@@ -9,11 +9,16 @@ import { NanoEngine, nanoSupported } from "./engines/nano";
 import type { LocalEngine } from "./engines/types";
 import { withResponseTrace } from "./trace";
 import { removeLegacyStorage } from "./model-store";
+import { raceAbort, untilAborted } from "./abortable";
 
 const DOWNLOADED_KEY = "downloadedModels";
 /** Where downloaded weights live; a different value means they were stored the old way. */
 const STORAGE_KEY = "modelStorage";
 const STORAGE = "indexeddb";
+/** How long an aborted generation may take to stop before its engine is treated as stuck. */
+const ABORT_GRACE_MS = 5_000;
+/** How long a stuck engine gets to unload before the next one loads anyway. */
+const UNLOAD_GRACE_MS = 5_000;
 
 function createEngine(id: EngineId): Promise<LocalEngine> | LocalEngine {
   switch (id) {
@@ -159,6 +164,16 @@ export class LocalRuntime {
     await c?.engine.unload();
   }
 
+  /** Drop an engine that didn't stop when aborted, so it can't hold the FIFO. The next generation loads a fresh one. */
+  private async abandon(): Promise<void> {
+    const c = this.current;
+    if (!c) return;
+    this.current = null;
+    console.warn(`[local] ${c.engine.id}:${c.model.id} did not stop after abort; unloading it`);
+    // A wedged engine may never finish unloading either.
+    await Promise.race([c.engine.unload().catch(() => {}), new Promise((r) => setTimeout(r, UNLOAD_GRACE_MS))]);
+  }
+
   async deleteModel(model: CatalogModel): Promise<void> {
     for (const id of ["transformers", "webllm", "wllama"] as EngineId[]) {
       if (!canRun(model, id, ALL_CAPS)) continue;
@@ -176,13 +191,22 @@ export class LocalRuntime {
     this.idleTimer = setTimeout(() => void this.unload(), idleMinutes * 60_000);
   }
 
-  /** Wait for this caller's turn on the FIFO; call the returned function to pass it on. */
-  private async turn(): Promise<() => void> {
+  /**
+   * Wait for this caller's turn on the FIFO; call the returned function to pass it on. If `signal`
+   * aborts while waiting, the caller leaves the line with AbortError.
+   */
+  private async turn(signal?: AbortSignal): Promise<() => void> {
     let release!: () => void;
     const turn = new Promise<void>((r) => (release = r));
-    const prev = this.queue;
+    const prev = this.queue.catch(() => {});
     this.queue = prev.then(() => turn);
-    await prev.catch(() => {});
+    try {
+      await (signal ? raceAbort(prev, signal) : prev);
+    } catch (e) {
+      // Our place in line passes straight on once the caller before us is done.
+      void prev.then(release);
+      throw e;
+    }
     return release;
   }
 
@@ -206,13 +230,16 @@ export class LocalRuntime {
     }
   }
 
-  /** FIFO: one local generation at a time. */
-  async *exclusive<T, R>(run: () => AsyncGenerator<T, R>, idleMinutes: number): AsyncGenerator<T, R> {
-    const release = await this.turn();
+  /**
+   * FIFO: one local generation at a time. Abort releases the turn even if the engine ignores
+   * `signal`; an engine still busy after the grace period is unloaded.
+   */
+  async *exclusive<T, R>(run: () => AsyncGenerator<T, R>, idleMinutes: number, signal: AbortSignal): AsyncGenerator<T, R> {
+    const release = await this.turn(signal);
     this.active++;
     clearTimeout(this.idleTimer);
     try {
-      return yield* run();
+      return yield* untilAborted(run(), signal, ABORT_GRACE_MS, () => this.abandon());
     } finally {
       this.active--;
       release();
@@ -282,6 +309,6 @@ export class LocalBackend implements Backend {
       const engine = await runtime.ensure(model, pin, maxContext);
       // Engines report their request; the wrapper adds the response for the playground's raw view.
       return yield* withResponseTrace(withReasoning, (o) => engine.generate(messages, o, signal));
-    }, this.idleMinutes);
+    }, this.idleMinutes, signal);
   }
 }

@@ -1,5 +1,7 @@
-// Toolbar popup: enable the current site (browser gate), see active sessions, open the playground.
+// Toolbar popup: enable the current site (browser gate), see active sessions, force-stop stuck
+// generations, open the playground.
 
+import type { HostStatus } from "../shared/host-protocol";
 import { getSite, normalizeOrigin, originPattern } from "../shared/settings";
 import { h, send } from "./dom";
 
@@ -16,7 +18,17 @@ async function main() {
   const sessions = await send<Record<string, number>>({ type: "sessions" }).catch(() => ({}) as Record<string, number>);
   const total = Object.values(sessions).reduce((a, b) => a + b, 0);
 
+  // Only ask the host when it has sessions: asking would otherwise start it.
+  const status = total ? await send<HostStatus>({ type: "admin", admin: { op: "status" } }).catch(() => null) : null;
+  const running = Object.values(status?.running ?? {}).reduce((a, b) => a + b, 0);
+
   app.append(h("h1", {}, "Local LLM"), h("p", { class: "muted small" }, `${total} active session${total === 1 ? "" : "s"}`));
+  if (running) {
+    // One stuck generation holds up every local request behind it; this stops them all.
+    app.append(h("div", { class: "row" },
+      h("span", { class: "small muted" }, `${running} request${running === 1 ? "" : "s"} running or queued`),
+      h("button", { class: "danger", title: "Abort every running and queued request. An engine that doesn't stop is unloaded.", onclick: async () => { await send({ type: "admin", admin: { op: "stop" } }); location.reload(); } }, "Force stop all")));
+  }
 
   if (origin) {
     const site = await getSite(origin);
@@ -30,6 +42,8 @@ async function main() {
         h("p", { class: "small muted" }, `${state} · backend: ${site.backend} · ${sessions[origin] ?? 0} session(s)`),
         h("button", { class: "danger", onclick: async () => { await send({ type: "site:revoke", origin }); location.reload(); } }, "Revoke access"),
       );
+      const siteRunning = status?.running[origin];
+      if (siteRunning) card.append(h("button", { onclick: async () => { await send({ type: "admin", admin: { op: "stop", origin } }); location.reload(); } }, `Stop this site's requests (${siteRunning})`));
     } else {
       card.append(
         h("p", {}, "Let ", h("strong", {}, host), " use window.LanguageModel?"),

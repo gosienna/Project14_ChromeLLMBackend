@@ -19,6 +19,7 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - Reasoning models (Qwen3, gpt-oss): llama.cpp separates thinking (`reasoning_format: "deepseek"`, plus a `<think>` splitter fallback); pages get the answer only, the playground shows thinking; options toggle turns thinking off or down
 - Weights stored in IndexedDB: Transformers.js and wllama share `model-store.ts` (64 MB Blob chunks, file record written last so interrupted downloads read as absent); WebLLM uses its `cacheBackend: "indexeddb"`. Older Cache Storage / OPFS copies are removed once on first start
 - Capability probe, lazy load, one model at a time, FIFO queue, idle unload (default 10 min), download/delete from options, `downloadprogress` to pages
+- Forced abort (`offscreen/abortable.ts`): abort releases the FIFO turn even if the engine ignores its signal; an engine still busy 5 s after abort is unloaded and reloads on the next request; queued requests leave the line when aborted. Popup shows requests running or queued, with **Force stop all** and a per-site stop (`stop` admin op). Unit-tested with a hanging generator; a stuck model *load* is not covered yet
 - Not yet verified: real downloads and generation in Chrome on the device matrix, including large-model loads and out-of-memory handling. Benchmarks (tokens/sec, TTFT, memory over 20 sessions) not started.
 
 ## Phase 3 — consent and permissions — done
