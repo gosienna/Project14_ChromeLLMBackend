@@ -11,6 +11,7 @@ type Pending = {
   resolve: (v: unknown) => void;
   reject: (e: unknown) => void;
   onChunk?: (text: string) => void;
+  onReasoning?: (text: string) => void;
   onProgress?: (loaded: number) => void;
   onDone?: (inputUsage?: number) => void;
   onToolCall?: (call: Extract<PageResponse, { kind: "tool-call" }>) => void;
@@ -62,6 +63,9 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
         break;
       case "chunk":
         p.onChunk?.(data.text);
+        break;
+      case "reasoning":
+        p.onReasoning?.(data.text);
         break;
       case "progress":
         p.onProgress?.(data.loaded);
@@ -184,6 +188,25 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
     return { decls, fns };
   }
 
+  interface PromptOptions {
+    signal?: AbortSignal;
+    responseConstraint?: unknown;
+    onReasoning?: (text: string) => void;
+  }
+
+  function reasoningCallback(options: PromptOptions): ((text: string) => void) | undefined {
+    const fn = options.onReasoning;
+    if (fn === undefined) return undefined;
+    if (typeof fn !== "function") throw new TypeError("onReasoning must be a function");
+    return (text) => {
+      try {
+        fn(text);
+      } catch {
+        /* a page callback must not break the stream */
+      }
+    };
+  }
+
   /** Largest tool result the extension accepts (protocol MAX_TEXT). */
   const MAX_RESULT = 1_000_000;
 
@@ -226,6 +249,7 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
       }
       if (options.temperature !== undefined) sessionOptions.temperature = options.temperature;
       if (options.topK !== undefined) sessionOptions.topK = options.topK;
+      if (options.reasoning === true) sessionOptions.reasoning = true;
       if ((options.temperature === undefined) !== (options.topK === undefined)) {
         throw new DOMException("temperature and topK must be specified together", "NotSupportedError");
       }
@@ -275,20 +299,21 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
       send({ kind: "tool-result", id: nextId(), target, callId: call.callId, result: result.slice(0, MAX_RESULT), isError });
     }
 
-    async prompt(input: PromptInput, options: { signal?: AbortSignal; responseConstraint?: unknown } = {}): Promise<string> {
+    /** `onReasoning` is non-standard: the model's thinking, for sessions created with reasoning: true. */
+    async prompt(input: PromptInput, options: PromptOptions = {}): Promise<string> {
       this.#check();
       if (options.responseConstraint !== undefined) throw new DOMException("responseConstraint is not supported yet", "NotSupportedError");
       let text = "";
       const id = nextId();
       await request<void>(
         { kind: "prompt", id, sessionId: this.#info.sessionId, input: normalize(input), stream: false },
-        { onChunk: (c) => (text += c), onDone: (u) => this.#setUsage(u), onToolCall: (c) => void this.#runTool(id, c) },
+        { onChunk: (c) => (text += c), onReasoning: reasoningCallback(options), onDone: (u) => this.#setUsage(u), onToolCall: (c) => void this.#runTool(id, c) },
         this.#signal(options.signal),
       );
       return text;
     }
 
-    promptStreaming(input: PromptInput, options: { signal?: AbortSignal; responseConstraint?: unknown } = {}): ReadableStream<string> {
+    promptStreaming(input: PromptInput, options: PromptOptions = {}): ReadableStream<string> {
       this.#check();
       if (options.responseConstraint !== undefined) throw new DOMException("responseConstraint is not supported yet", "NotSupportedError");
       const messages = normalize(input);
@@ -298,7 +323,7 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
         start: (controller) => {
           request<void>(
             { kind: "prompt", id, sessionId: this.#info.sessionId, input: messages, stream: true },
-            { onChunk: (c) => controller.enqueue(c), onDone: (u) => this.#setUsage(u), onToolCall: (c) => void this.#runTool(id, c) },
+            { onChunk: (c) => controller.enqueue(c), onReasoning: reasoningCallback(options), onDone: (u) => this.#setUsage(u), onToolCall: (c) => void this.#runTool(id, c) },
             signal,
           ).then(() => controller.close(), (e) => controller.error(e));
         },

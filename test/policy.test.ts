@@ -52,4 +52,9 @@ describe("deliversTo", () => {
     expect(deliversTo("chunk", false)).toBe(true);
   });
   it("sends reasoning to the playground", () => expect(deliversTo("reasoning", true)).toBe(true));
+  it("sends reasoning to pages that opted in, never traces", () => {
+    expect(deliversTo("reasoning", false, true)).toBe(true);
+    expect(deliversTo("trace", false, true)).toBe(false);
+    expect(deliversTo("trace", true)).toBe(true);
+  });
 });

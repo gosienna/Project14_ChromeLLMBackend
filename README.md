@@ -182,6 +182,21 @@ for await (const chunk of session.promptStreaming("Explain WebGPU in two paragra
 
 Local and cloud backends stream the same way. Cancelling the stream, for example by breaking out of the loop or calling `reader.cancel()`, stops generation.
 
+#### Reasoning (extension only)
+
+By default a page gets the answer only. To also see a reasoning model's thinking, opt in when you create the session and pass `onReasoning` to `prompt()` or `promptStreaming()`:
+
+```js
+const session = await LanguageModel.create({ reasoning: true });
+for await (const chunk of session.promptStreaming("Why is the sky blue?", {
+  onReasoning: (text) => (thinking.textContent += text), // deltas, kept out of the answer
+})) {
+  output.textContent += chunk;
+}
+```
+
+Clones of an opted-in session keep the opt-in. Models that don't reason never call `onReasoning`. Chrome's native API ignores both options.
+
 ### 7. Conversations and context
 
 ```js
@@ -303,7 +318,7 @@ const models = await window.localLLM.models(); // the default model comes first
 | `contextWindow` | The model's maximum context in tokens |
 | `inputQuota` | The context a session actually gets: the smaller of `contextWindow` and the user's limit |
 | `maxOutputTokens` | The longest reply a session allows |
-| `reasoning` | `"hybrid"` (can skip thinking) or `"always"`; absent for models that don't reason. Your page gets the answer only |
+| `reasoning` | `"hybrid"` (can skip thinking) or `"always"`; absent for models that don't reason. Your page gets the answer only, unless it opts in with `create({ reasoning: true })` |
 | `tools` | `"native"` or `"prompted"` tool calling |
 | `price` | List price in USD per million tokens (`input`, `output`, optional `cachedInput`, `long` for long-prompt rates, `note`, `asOf`). Local models are `{ input: 0, output: 0 }`; `null` means unknown, or that the price depends on where a router sends the request |
 | `sizeMB`, `legacy` | Download size of a local model; an older cloud model the provider still serves |
@@ -466,6 +481,7 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 | `window.localLLM.info()` | Extension only: `{ name, backend, images, tools, version }` |
 | `window.localLLM.models()` | Extension only: the models your site can run now; see [Model information](#11-model-information) |
 | `LanguageModel.create({ model })` | Extension only: a `localLLM.models()` id; ignored by Chrome's native API |
+| `LanguageModel.create({ reasoning: true })` + `prompt*(input, { onReasoning })` | Extension only: deltas of a reasoning model's thinking; see [Reasoning](#reasoning-extension-only) |
 | `window.localLLM.version`, `window.localLLM.overridesNative` | Extension only |
 | `localllm:ready` event on `window` | Fired when the extension's API is injected |
 | Not yet | `responseConstraint`, image/audio input from pages, `quotaoverflow` event |

@@ -27,6 +27,13 @@ describe("parsePageRequest", () => {
     expect(create("local:a\nb")).toBeNull();
   });
 
+  it("accepts a boolean reasoning opt-in on create", () => {
+    const create = (reasoning: unknown) => parsePageRequest({ kind: "create", id: "r1", options: { reasoning }, monitor: false });
+    expect(create(true)).toBeTruthy();
+    expect(create(false)).toBeTruthy();
+    expect(create("yes")).toBeNull();
+  });
+
   it("drops unknown kinds and extra fields", () => {
     expect(parsePageRequest({ kind: "readTabs", id: "r1" })).toBeNull();
     expect(parsePageRequest({ kind: "availability", id: "r1", origin: "https://evil.example" })).toBeNull();
@@ -78,6 +85,7 @@ describe("parsePageResponse", () => {
   it("validates response shapes", () => {
     expect(parsePageResponse({ kind: "chunk", id: "r1", text: "a" })).toBeTruthy();
     expect(parsePageResponse({ kind: "chunk", id: "r1", text: 1 })).toBeNull();
+    expect(parsePageResponse({ kind: "reasoning", id: "r1", text: "hm" })).toBeTruthy();
     expect(parsePageResponse({ kind: "error", id: "r1", name: "AbortError", message: "x" })).toBeTruthy();
     expect(parsePageResponse({ kind: "bogus", id: "r1" })).toBeNull();
   });

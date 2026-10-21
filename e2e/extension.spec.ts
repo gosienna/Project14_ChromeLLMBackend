@@ -90,6 +90,35 @@ test("a denied site lists no models", async ({ context, sw }) => {
   expect(await page.evaluate(() => (window as any).localLLM.models())).toEqual([]);
 });
 
+test("pages get reasoning only when the session opted in", async ({ context, sw }) => {
+  await enable(sw, "always");
+  const page = await context.newPage();
+  await page.goto(PAGE);
+  const result = await page.evaluate(async () => {
+    const LM = (window as any).LanguageModel;
+    const run = async (s: any) => {
+      const thoughts: string[] = [];
+      let answer = "";
+      for await (const chunk of s.promptStreaming("/think x", { onReasoning: (t: string) => thoughts.push(t) })) answer += chunk;
+      return { thoughts, answer };
+    };
+    const first = await LM.create();
+    const plain = await run(first);
+    first.destroy();
+    const opted = await LM.create({ reasoning: true });
+    const withReasoning = await run(opted);
+    const clone = await opted.clone();
+    opted.destroy();
+    const cloned = await run(clone);
+    clone.destroy();
+    return { plain, withReasoning, cloned };
+  });
+  expect(result.plain.thoughts).toEqual([]);
+  expect(result.withReasoning.thoughts.join("")).toContain("Thinking about: /think x");
+  expect(result.withReasoning.answer).not.toContain("Thinking about");
+  expect(result.cloned.thoughts.length).toBeGreaterThan(0);
+});
+
 test("abort signal cancels a prompt", async ({ context, sw }) => {
   await enable(sw, "always");
   const page = await context.newPage();

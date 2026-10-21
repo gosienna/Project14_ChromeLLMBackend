@@ -46,9 +46,12 @@ export function consentAvailability(site: SiteConfig | undefined, permitted: boo
 }
 
 /**
- * Pages get the model's answer only, as the Prompt API defines it. A reasoning model's thinking
- * and the raw request/response traces go to the extension's own playground and nowhere else.
+ * Pages get the model's answer, as the Prompt API defines it, plus a reasoning model's thinking
+ * when the page opted in with create({ reasoning: true }). Raw request/response traces go to the
+ * extension's own playground and nowhere else.
  */
-export function deliversTo(kind: PageResponseKind, toPlayground: boolean): boolean {
-  return (kind !== "reasoning" && kind !== "trace") || toPlayground;
+export function deliversTo(kind: PageResponseKind, toPlayground: boolean, wantsReasoning = false): boolean {
+  if (toPlayground) return true;
+  if (kind === "trace") return false;
+  return kind !== "reasoning" || wantsReasoning;
 }

@@ -51,12 +51,17 @@ interface PageConn {
 interface InFlight {
   conn: PageConn;
   id: string;
+  /** create: the page asked for reasoning. Other kinds: the session the request runs on. */
+  reasoning?: boolean;
+  sessionId?: string;
 }
 
 const conns = new Map<string, PageConn>();
 const inFlight = new Map<string, InFlight>();
 /** sessionId -> backend id, for spend caps. Rebuilt lazily after a worker restart. */
 const sessionBackends = new Map<string, string>();
+/** Sessions whose page opted in to reasoning with create({ reasoning: true }). */
+const reasoningSessions = new Set<string>();
 const limiter = new TokenRateLimiter();
 let connCounter = 0;
 // Unique across worker restarts, since the host outlives the worker.
@@ -268,7 +273,7 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
     }
 
     case "create": {
-      const { model, ...options } = req.options;
+      const { model, reasoning, ...options } = req.options;
       const chosen = model !== undefined ? await chosenBackend(model, site!, settings) : null;
       const backends = chosen?.backends ?? (await backendChain(site!, settings));
       if (g.action === "ask") {
@@ -282,7 +287,7 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
         });
         if (decision === "deny") throw new LLMError("NotAllowedError", "The user denied access to the model");
       }
-      return forward(conn, { ...req, options }, { ...base, backends });
+      return forward(conn, { ...req, options }, { ...base, backends }, reasoning === true);
     }
 
     case "prompt":
@@ -331,9 +336,10 @@ async function handlePlaygroundRequest(conn: PageConn, req: PageRequest, backend
   }
 }
 
-async function forward(conn: PageConn, req: PageRequest, base: Omit<HostRequest, "rid" | "req">) {
+async function forward(conn: PageConn, req: PageRequest, base: Omit<HostRequest, "rid" | "req">, reasoning = false) {
   const r = rid(conn, req.id);
-  if (req.kind !== "destroy") inFlight.set(r, { conn, id: req.id });
+  if (req.kind === "destroy") reasoningSessions.delete(req.sessionId);
+  else inFlight.set(r, { conn, id: req.id, ...(reasoning ? { reasoning } : {}), ...("sessionId" in req ? { sessionId: req.sessionId } : {}) });
   await sendToHost({ ...base, rid: r, req: { ...req, id: r } });
 }
 
@@ -364,8 +370,14 @@ onHostMessage((msg: FromHost) => {
         const info = msg.res.value as { sessionId?: string };
         if (info?.sessionId) sessionBackends.set(info.sessionId, msg.sessionBackend);
       }
+      if (msg.res.kind === "result" && (f.reasoning || (f.sessionId && reasoningSessions.has(f.sessionId)))) {
+        // A create that opted in, or a clone of a session that did.
+        const info = msg.res.value as { sessionId?: string };
+        if (info?.sessionId) reasoningSessions.add(info.sessionId);
+      }
       if (msg.res.kind === "result" || msg.res.kind === "error" || msg.res.kind === "done") inFlight.delete(msg.rid);
-      if (!deliversTo(msg.res.kind, f.conn.origin === PLAYGROUND_ORIGIN)) return;
+      const wantsReasoning = !!f.sessionId && reasoningSessions.has(f.sessionId);
+      if (!deliversTo(msg.res.kind, f.conn.origin === PLAYGROUND_ORIGIN, wantsReasoning)) return;
       reply(f.conn, { ...msg.res, id: f.id });
       return;
     }
@@ -388,6 +400,7 @@ onHostDisconnect(() => {
     inFlight.delete(k);
   }
   sessionBackends.clear();
+  reasoningSessions.clear();
   updateBadge({});
 });
 

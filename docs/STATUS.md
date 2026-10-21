@@ -69,6 +69,12 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - `@local-llm/web` `Found.models()`; the demo page shows the list
 - Tests: list building (downloads, caps, pins, Nano, echo, cloud scope, unlisted ids, limits, ordering), id parsing, protocol, gate; E2E list + choice + unknown id + denied site. Not yet verified with real downloaded models or live providers
 
+## Opt-in reasoning for pages — done (echo engine)
+
+- `create({ reasoning: true })` (non-standard) makes the router deliver `reasoning` responses to that page session and its clones; `prompt()`/`promptStreaming()` take `onReasoning(text)`. The router strips the flag before the host and tracks session ids (`reasoningSessions`); `trace` stays playground-only. `parsePageResponse` now passes `reasoning` through the bridge
+- First user: LearnWithLLM's Debug mode
+- Tests: protocol field, `deliversTo`; E2E plain vs opted-in vs clone with the echo engine's `/think`. Not yet verified with real reasoning models
+
 ## Not started / v2
 
 - Structured output (`responseConstraint`), embeddings

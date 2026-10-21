@@ -56,6 +56,11 @@ export interface SessionOptions {
    * the site itself, and removes the field before the request reaches the host.
    */
   model?: string;
+  /**
+   * Non-standard: deliver the model's thinking to the page as `reasoning` responses (the polyfill's
+   * `onReasoning` prompt option). The router removes the field before the request reaches the host.
+   */
+  reasoning?: boolean;
 }
 
 /** USD per million tokens, as in shared/cloud-models.ts. Local models cost 0. */
@@ -158,7 +163,7 @@ export type PageResponse =
   | { kind: "result"; id: string; value: unknown }
   | { kind: "error"; id: string; name: string; message: string }
   | { kind: "chunk"; id: string; text: string }
-  /** A reasoning model's thinking. The router forwards it to the extension's playground only. */
+  /** A reasoning model's thinking. The router forwards it to the playground and to sessions created with reasoning: true. */
   | { kind: "reasoning"; id: string; text: string }
   | { kind: "done"; id: string; inputUsage?: number }
   | { kind: "progress"; id: string; loaded: number }
@@ -241,10 +246,11 @@ const isModelId = (v: unknown): v is string =>
 
 function isSessionOptions(v: unknown): v is SessionOptions {
   if (!isObj(v)) return false;
-  if (Object.keys(v).some((k) => !["initialPrompts", "temperature", "topK", "tools", "model"].includes(k))) return false;
+  if (Object.keys(v).some((k) => !["initialPrompts", "temperature", "topK", "tools", "model", "reasoning"].includes(k))) return false;
   if (v.initialPrompts !== undefined && !isMessages(v.initialPrompts, false)) return false;
   if (v.tools !== undefined && !isTools(v.tools)) return false;
   if (v.model !== undefined && !isModelId(v.model)) return false;
+  if (v.reasoning !== undefined && typeof v.reasoning !== "boolean") return false;
   return isOptNum(v.temperature, 0, 2) && isOptNum(v.topK, 1, 1000);
 }
 
@@ -310,6 +316,7 @@ export function parsePageResponse(v: unknown): PageResponse | null {
     case "error":
       return typeof v.name === "string" && typeof v.message === "string" ? (v as PageResponse) : null;
     case "chunk":
+    case "reasoning":
       return typeof v.text === "string" ? (v as PageResponse) : null;
     case "done":
       return v.inputUsage === undefined || typeof v.inputUsage === "number" ? (v as PageResponse) : null;

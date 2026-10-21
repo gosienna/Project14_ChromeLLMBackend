@@ -42,6 +42,8 @@ async function main() {
         h("p", { class: "small muted" }, `${state} · backend: ${site.backend} · ${sessions[origin] ?? 0} session(s)`),
         h("button", { class: "danger", onclick: async () => { await send({ type: "site:revoke", origin }); location.reload(); } }, "Revoke access"),
       );
+      // Idle sessions have nothing to abort, so the stop buttons below never show for them.
+      if (sessions[origin]) card.append(h("button", { title: "Destroy this site's open sessions; the site stays enabled. The page's session objects stop working.", onclick: async () => { await send({ type: "admin", admin: { op: "revokeOrigin", origin } }); location.reload(); } }, `End sessions (${sessions[origin]})`));
       const siteRunning = status?.running[origin];
       if (siteRunning) card.append(h("button", { onclick: async () => { await send({ type: "admin", admin: { op: "stop", origin } }); location.reload(); } }, `Stop this site's requests (${siteRunning})`));
     } else {
