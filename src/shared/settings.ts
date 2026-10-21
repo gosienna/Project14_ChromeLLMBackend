@@ -37,7 +37,10 @@ export interface SiteConfig {
   allowedBackends: BackendId[];
   /** Backend used for new sessions; must be in allowedBackends. */
   backend: BackendId;
+  /** Ignored while `dailyTokenUnlimited` is set. */
   dailyTokenCap: number;
+  /** No daily token cap for this site. `dailyTokenCap` is kept for when this is turned off. */
+  dailyTokenUnlimited?: boolean;
   /** Fall back from local to another allowed backend when WebGPU/local is unavailable. */
   allowFallback: boolean;
 }

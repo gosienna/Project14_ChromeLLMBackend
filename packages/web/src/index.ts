@@ -32,14 +32,42 @@ export interface ExtensionInfo {
   version: string;
 }
 
+/** A model the site can run now, from the extension's localLLM.models(). */
+export interface ModelInfo {
+  /** Pass to LanguageModel.create({ model }). */
+  id: string;
+  name: string;
+  /** "local" or a provider id. */
+  backend: string;
+  provider: string;
+  engine?: string;
+  /** What create() uses without a `model`. */
+  default: boolean;
+  /** What the model takes ("text", "image", "audio", "video", "pdf"); pages send text only. */
+  input: string[];
+  output: string[];
+  contextWindow: number;
+  /** Context a session gets. */
+  inputQuota: number;
+  maxOutputTokens: number;
+  reasoning?: "hybrid" | "always";
+  tools: "native" | "prompted";
+  /** USD per million tokens; 0 for local models, null when unknown. */
+  price: { input: number; output: number; cachedInput?: number; long?: { above: number; input: number; output: number }; note?: string; asOf?: string } | null;
+  sizeMB?: number;
+  legacy?: boolean;
+}
+
 export interface Found {
   LanguageModel: LanguageModelStatic;
   source: Source;
   /** Model and backend details when the extension provides the API. */
   info(): Promise<ExtensionInfo | null>;
+  /** Models the site can run now; empty with Chrome's native API, which has one model. */
+  models(): Promise<ModelInfo[]>;
 }
 
-type Win = { LanguageModel?: LanguageModelStatic; localLLM?: { info(): Promise<ExtensionInfo> } };
+type Win = { LanguageModel?: LanguageModelStatic; localLLM?: { info(): Promise<ExtensionInfo>; models?(): Promise<ModelInfo[]> } };
 
 const win = (): Win | undefined => (typeof window === "undefined" ? undefined : (window as unknown as Win));
 
@@ -53,6 +81,7 @@ function current(): Found | null {
     // case window.localLLM is present alongside it.
     source: ext ? "extension" : "native",
     info: async () => (ext ? ext.info() : null),
+    models: async () => (ext?.models ? ext.models() : []),
   };
 }
 

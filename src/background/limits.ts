@@ -57,6 +57,11 @@ export function siteTokensToday(usage: UsageEntry[], origin: string, now: number
   return usage.filter((e) => e.origin === origin && e.time >= since).reduce((s, e) => s + total(e), 0);
 }
 
+/** True when today's usage plus the next estimate is over the site cap. Unlimited sites never exceed it. */
+export function exceedsDailyTokenCap(used: number, cap: number, unlimited = false): boolean {
+  return !unlimited && used > cap;
+}
+
 export function providerTokensThisMonth(usage: UsageEntry[], backend: string, now: number): number {
   const since = startOfMonth(now);
   return usage.filter((e) => e.backend === backend && e.time >= since).reduce((s, e) => s + total(e), 0);

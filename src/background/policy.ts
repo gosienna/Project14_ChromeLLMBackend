@@ -28,7 +28,7 @@ export function gate({ kind, site, permitted, onceGrant, visible }: GateInput): 
   if (kind === "abort" || kind === "destroy" || kind === "tool-result") return { action: "allow" };
   if (!permitted || !site) return deny("This site is not enabled for the local model");
   // Discovery calls never prompt; availability() reports consent state itself.
-  if (kind === "availability" || kind === "params" || kind === "info") return { action: "allow" };
+  if (kind === "availability" || kind === "params" || kind === "info" || kind === "models") return { action: "allow" };
   if (site.consent === "deny") return deny("The user denied this site access to the model");
 
   const always = site.consent === "always";

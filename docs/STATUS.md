@@ -60,9 +60,17 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - Tool results capped (3 000 chars local, 8 000 cloud); changing tools mid-chat continues in a new session with the transcript
 - Tests: trace sanitizer/adapter tracing/error trace, registry seeding/validation/reset, registry tools, schema form round trip, payload validation; E2E raw view, edited request, custom tool in sandbox with Run/Deny, registry tool, browser tools on a test page. Not yet verified: web_search against Tavily, download/console tools, real models choosing these tools
 
+## Model list and choice for pages — done (echo engine)
+
+- `window.localLLM.models()` lists the models a site can run now: downloaded local builds this device can run (Nano also needs Chrome's model; the echo engine only when configured), and for each cloud provider in the site's allowed backends that is enabled, keyed and permitted, its curated models plus the configured id. Each entry has id, name, provider, engine, default flag, input/output types, context window, session quota, max output, reasoning, tool mode, price (USD/1M, `asOf`; local 0; null when unknown) and size. Built in the router (`background/models.ts`, pure), from the host's status (`nano` added) and the router's key/permission checks
+- `LanguageModel.create({ model })`: the router accepts only ids from that site's list, builds a single backend (no fallback) and names the model in the consent dialog. `parsePageRequest` allows `options.model` (string ≤ 256, printable); the router strips it before the host
+- Local runtime: `prepare` and `countTokens` load through the generation FIFO (`ensureQueued`), so a site loading another local model waits instead of unloading one mid-generation
+- `@local-llm/web` `Found.models()`; the demo page shows the list
+- Tests: list building (downloads, caps, pins, Nano, echo, cloud scope, unlisted ids, limits, ordering), id parsing, protocol, gate; E2E list + choice + unknown id + denied site. Not yet verified with real downloaded models or live providers
+
 ## Not started / v2
 
-- Structured output (`responseConstraint`), model hints, embeddings
+- Structured output (`responseConstraint`), embeddings
 - `quotaoverflow` event dispatch (overflow currently evicts oldest turns silently)
 - Ollama mDNS discovery (the plan's "carry over" code isn't in this repository; use a custom OpenAI-compatible endpoint)
 - Conformance suite run against native Chrome Prompt API in CI; lifecycle tests (worker killed mid-stream, extension update)

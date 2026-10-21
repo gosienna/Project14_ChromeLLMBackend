@@ -140,7 +140,7 @@ Cloud providers plug in as backend adapters behind the same `LanguageModel` API,
 - The user maps each approved site to allowed backends; new sites default to local only
 - When a site would use a cloud backend, the consent dialog says so plainly: prompts leave the device and usage is billed to the user's key
 - Spend caps per site (daily tokens) and per provider (monthly estimate), shown in the usage log with estimated cost
-- The user sets a default model per provider; pages may pass a model hint through `window.localLLM` in v2, never a forced choice
+- The user sets a default model per provider; pages may pass a model hint through `window.localLLM` in v2, never a forced choice. *Done differently (2026-10-21):* `localLLM.models()` lists the site's runnable models and `create({ model })` picks one of them; the user still decides which backends a site may use
 
 ## Roadmap
 

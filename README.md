@@ -271,7 +271,55 @@ if (window.localLLM) {
 }
 ```
 
-The user chooses the model and backend. Your site can't select them.
+#### Listing the models your site can run
+
+`localLLM.models()` lists the models your site can use **right now**:
+
+- local models whose weights are already downloaded and that can run on this device
+- cloud models from providers that the user has set up with an API key and allowed for your site
+
+Your site only sees the backends the user allowed for it, which is the local model alone by default. You never learn about other providers the user has keys for. Models that would need a download first are not listed. If the user denied your site, the list is empty.
+
+```js
+const models = await window.localLLM.models(); // the default model comes first
+// [
+//   { id: "local:qwen3-0.6b", name: "Qwen3 0.6B", backend: "local", provider: "Local", engine: "wllama",
+//     default: true, input: ["text"], output: ["text"], contextWindow: 40960, inputQuota: 8192,
+//     maxOutputTokens: 8192, reasoning: "hybrid", tools: "native", price: { input: 0, output: 0 }, sizeMB: 378 },
+//   { id: "anthropic:claude-haiku-5-5", name: "Claude Haiku 5.5", backend: "anthropic", provider: "Anthropic",
+//     default: false, input: ["text", "image", "pdf"], output: ["text"], contextWindow: 1000000, inputQuota: 8192,
+//     maxOutputTokens: 8192, reasoning: "hybrid", tools: "native",
+//     price: { input: 0.1, output: 0.5, cachedInput: 0.01, long: { above: 100000, input: 0.5, output: 2.5 }, asOf: "2026-10-20" } },
+// ]
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `"local:<model>"` or `"<provider>:<model>"`; pass it to `create({ model })` |
+| `name`, `provider`, `backend` | Display name, `"Local"` or the provider's name, and `"local"` or the provider id |
+| `engine` | Local models only: `"webllm"`, `"transformers"`, `"wllama"`, `"nano"` or `"dummy"` |
+| `default` | What `create()` uses when you don't pass `model` |
+| `input`, `output` | What the model accepts (`text`, `image`, `audio`, `video`, `pdf`) and produces (`text`). Pages can send text only for now |
+| `contextWindow` | The model's maximum context in tokens |
+| `inputQuota` | The context a session actually gets: the smaller of `contextWindow` and the user's limit |
+| `maxOutputTokens` | The longest reply a session allows |
+| `reasoning` | `"hybrid"` (can skip thinking) or `"always"`; absent for models that don't reason. Your page gets the answer only |
+| `tools` | `"native"` or `"prompted"` tool calling |
+| `price` | List price in USD per million tokens (`input`, `output`, optional `cachedInput`, `long` for long-prompt rates, `note`, `asOf`). Local models are `{ input: 0, output: 0 }`; `null` means unknown, or that the price depends on where a router sends the request |
+| `sizeMB`, `legacy` | Download size of a local model; an older cloud model the provider still serves |
+
+#### Choosing a model
+
+Pass a listed `id` to `create()`. Chrome's native API ignores the option.
+
+```js
+const session = await LanguageModel.create({ model: "anthropic:claude-haiku-5-5" });
+```
+
+- The extension accepts only ids from your site's current list. Any other id rejects with `NotSupportedError`.
+- A model you choose is used as is: the extension never falls back to another backend for it.
+- The first `create()` still shows the consent dialog. It names the model you chose, and for cloud models it warns that prompts leave the device.
+- Only one local model is loaded at a time. If sites use different local models, the extension reloads weights between their turns, which is slow for large models.
 
 ### 12. Errors
 
@@ -283,7 +331,7 @@ All failures reject with a `DOMException`. Check `error.name`:
 | `QuotaExceededError` | Too many open sessions; a per-minute, daily or monthly token limit reached; a prompt larger than the context window | Destroy unused sessions, retry later, or shorten input |
 | `AbortError` | Your `signal` was aborted, or the session was destroyed | Usually ignore |
 | `InvalidStateError` | The session was destroyed, or the extension restarted and lost it | Create a new session |
-| `NotSupportedError` | Non-text modality; `responseConstraint`; no model can run on this device | Fall back |
+| `NotSupportedError` | Non-text modality; `responseConstraint`; no model can run on this device; `create({ model })` with an id that isn't in `localLLM.models()` | Fall back, or list the models again |
 | `NetworkError` | A cloud provider was unreachable or returned an error | Retry or fall back |
 | `DataError` | A cloud provider rejected the request (for example an invalid model name) | Fall back |
 | `OperationError` | The extension restarted mid-request, or an internal error | Retry once with a new session |
@@ -416,6 +464,8 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 | `session.destroy()` | Frees the session |
 | `LanguageModel.create({ tools })` | Tools with `execute()`, run in the page; see [Tool calling](#10-tool-calling) |
 | `window.localLLM.info()` | Extension only: `{ name, backend, images, tools, version }` |
+| `window.localLLM.models()` | Extension only: the models your site can run now; see [Model information](#11-model-information) |
+| `LanguageModel.create({ model })` | Extension only: a `localLLM.models()` id; ignored by Chrome's native API |
 | `window.localLLM.version`, `window.localLLM.overridesNative` | Extension only |
 | `localllm:ready` event on `window` | Fired when the extension's API is injected |
 | Not yet | `responseConstraint`, image/audio input from pages, `quotaoverflow` event |
@@ -423,7 +473,7 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 ### Security and privacy notes for app developers
 
 - **Your site never handles keys or model files.** Cloud keys stay inside the extension; your page receives model output only.
-- **The user controls the backend.** A site may be served by a local model or by a cloud provider the user allowed for it. When cloud is used, the consent dialog tells the user that prompts leave their device and are billed to their key. Don't assume prompts stay on the device.
+- **The user controls the backend.** A site may be served by a local model or by a cloud provider the user allowed for it. Your site can pick among those models with `create({ model })`, but never outside them. When cloud is used, the consent dialog tells the user that prompts leave their device and are billed to their key. Don't assume prompts stay on the device.
 - **All scripts on an approved site share access.** Once the user approves your origin, any script running on it can call the model, third-party ads and analytics included. Keep untrusted scripts off pages that use it, or use a dedicated subdomain.
 - **No browsing data crosses over.** The API exposes only text generation: no page content, tabs, history or extension features.
 - **Usage is visible to the user.** The extension logs origin, time and token counts (never prompt text), and the user can revoke your site at any time. Handle `NotAllowedError` gracefully.

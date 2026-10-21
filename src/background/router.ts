@@ -3,14 +3,15 @@
 // routes requests to it. Pages never see keys, other tabs or anything but model output.
 
 import type { BridgeEnvelope } from "../bridge/bridge";
-import { findModel } from "../shared/catalog";
+import { findModel, type EngineId } from "../shared/catalog";
 import { LLMError, toWireError } from "../shared/errors";
-import type { AdminOp, BackendSpec, FromHost, HostRequest } from "../shared/host-protocol";
+import type { AdminOp, BackendSpec, FromHost, HostRequest, HostStatus } from "../shared/host-protocol";
 import { getKey } from "../shared/keystore";
 import {
   estimateMessageTokens,
   estimateTokens,
   parsePageRequest,
+  type ModelInfo,
   type PageRequest,
   type PageRequestKind,
   type PageResponse,
@@ -31,7 +32,8 @@ import {
 } from "../shared/settings";
 import { askConsent, clearOnceGrants, getConsentRequest, hasOnceGrant, onWindowClosed, settle, type Decision } from "./consent";
 import { hostReady, onHostDisconnect, onHostMessage, sendToHost } from "./host-link";
-import { TokenRateLimiter, providerTokensThisMonth, siteTokensToday } from "./limits";
+import { TokenRateLimiter, exceedsDailyTokenCap, providerTokensThisMonth, siteTokensToday } from "./limits";
+import { configuredLocalModel, listModels, parseModelId } from "./models";
 import { consentAvailability, deliversTo, gate } from "./policy";
 import { isPermitted, syncRegistrations } from "./registration";
 
@@ -125,7 +127,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
 async function backendSpec(id: string, settings: Settings): Promise<BackendSpec> {
   if (id === "local") {
-    const model = findModel(settings.local.modelId) ?? findModel("qwen2.5-0.5b-instruct")!;
+    const model = configuredLocalModel(settings);
     return { kind: "local", model, engine: settings.local.enginePin[model.id] ?? "auto", reasoning: settings.local.reasoning };
   }
   const provider = findProvider(settings, id);
@@ -155,6 +157,35 @@ async function backendChain(site: SiteConfig, settings: Settings): Promise<Array
   }
   if (!chain.length) throw firstError ?? new LLMError("NotSupportedError", "No backend is configured for this site");
   return chain;
+}
+
+/** Models the site may run right now: its allowed backends that are ready (weights, key, permission). */
+async function siteModels(site: SiteConfig, settings: Settings): Promise<ModelInfo[]> {
+  const host = site.allowedBackends.includes("local") ? ((await admin({ op: "status" }).catch(() => null)) as HostStatus | null) : null;
+  const providers = [];
+  for (const id of site.allowedBackends) {
+    if (id === "local") continue;
+    try {
+      const spec = await backendSpec(id, settings);
+      if (spec.kind === "cloud") providers.push(spec.provider);
+    } catch {
+      /* not enabled, no key or no permission: not runnable */
+    }
+  }
+  return listModels({ settings, site, host, providers });
+}
+
+/** The backend for create({ model }): only an id from the site's own list, and no fallback. */
+async function chosenBackend(id: string, site: SiteConfig, settings: Settings): Promise<{ entry: ModelInfo; backends: Array<{ id: string; spec: BackendSpec }> }> {
+  const entry = (await siteModels(site, settings)).find((m) => m.id === id);
+  const parsed = parseModelId(id);
+  if (!entry || !parsed) throw new LLMError("NotSupportedError", `Model ${id} is not available to this site`);
+  const base = await backendSpec(entry.backend, settings);
+  const spec: BackendSpec =
+    base.kind === "local"
+      ? { ...base, model: findModel(parsed.model)!, engine: entry.engine as EngineId }
+      : { ...base, model: parsed.model };
+  return { entry, backends: [{ id: entry.backend, spec }] };
 }
 
 function backendName(id: string, settings: Settings): string {
@@ -230,20 +261,28 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
     case "info":
       return forward(conn, req, { ...base, backends: await backendChain(site ?? defaultSite(origin), settings) });
 
+    case "models": {
+      // Answered here: the list depends on keys and permissions, which the host never sees.
+      const value = site && site.consent !== "deny" ? await siteModels(site, settings) : [];
+      return reply(conn, { kind: "result", id: req.id, value });
+    }
+
     case "create": {
-      const backends = await backendChain(site!, settings);
+      const { model, ...options } = req.options;
+      const chosen = model !== undefined ? await chosenBackend(model, site!, settings) : null;
+      const backends = chosen?.backends ?? (await backendChain(site!, settings));
       if (g.action === "ask") {
         const cloud = backends[0].spec.kind === "cloud";
         const decision: Decision = await askConsent({
           origin,
           tabId,
           backend: backends[0].id,
-          backendName: backendName(backends[0].id, settings),
+          backendName: !chosen ? backendName(backends[0].id, settings) : cloud ? `${chosen.entry.name} (${chosen.entry.provider})` : chosen.entry.name,
           cloud,
         });
         if (decision === "deny") throw new LLMError("NotAllowedError", "The user denied access to the model");
       }
-      return forward(conn, req, { ...base, backends });
+      return forward(conn, { ...req, options }, { ...base, backends });
     }
 
     case "prompt":
@@ -254,7 +293,7 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
       }
       const usage = await getUsage();
       const s = site!;
-      if (siteTokensToday(usage, origin, Date.now()) + est > s.dailyTokenCap) {
+      if (exceedsDailyTokenCap(siteTokensToday(usage, origin, Date.now()) + est, s.dailyTokenCap, s.dailyTokenUnlimited)) {
         throw new LLMError("QuotaExceededError", "Daily token cap for this site reached");
       }
       checkProviderCap(usage, sessionBackends.get(req.sessionId) ?? s.backend, est, settings);

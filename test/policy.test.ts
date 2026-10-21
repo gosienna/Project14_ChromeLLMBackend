@@ -30,6 +30,8 @@ describe("gate", () => {
   it("honors Deny but keeps discovery and cleanup working", () => {
     expect(gate({ ...base, kind: "create", site: site("deny") }).action).toBe("deny");
     expect(gate({ ...base, kind: "availability", site: site("deny") }).action).toBe("allow");
+    expect(gate({ ...base, kind: "models", site: site() }).action).toBe("allow");
+    expect(gate({ ...base, kind: "models", site: site(), permitted: false }).action).toBe("deny");
     expect(gate({ ...base, kind: "destroy", site: site("deny") }).action).toBe("allow");
   });
 });

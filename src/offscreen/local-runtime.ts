@@ -1,7 +1,7 @@
 // Local model lifecycle in the offscreen host: capability probe, engine auto-selection, lazy
 // load, one loaded model at a time, FIFO generation queue and idle unload.
 
-import { ALL_CAPS, autoSelectEngine, canRun, contextLimit, takesImages, toolMode, type CatalogModel, type DeviceCaps, type EngineId } from "../shared/catalog";
+import { ALL_CAPS, canRun, contextLimit, resolveEngine, takesImages, toolMode, type CatalogModel, type DeviceCaps, type EngineId } from "../shared/catalog";
 import type { Availability, ChatMessage, ModelParams } from "../shared/protocol";
 import { DEFAULT_PARAMS, type Backend, type GenerateOptions, type GenerateResult } from "./backend";
 import { DummyEngine } from "./engines/dummy";
@@ -75,8 +75,7 @@ export class LocalRuntime {
   }
 
   resolveEngine(model: CatalogModel, pin: EngineId | "auto"): EngineId | null {
-    if (pin !== "auto") return canRun(model, pin, this.caps) ? pin : null;
-    return autoSelectEngine(model, this.caps);
+    return resolveEngine(model, pin, this.caps);
   }
 
   get loaded() {
@@ -177,13 +176,39 @@ export class LocalRuntime {
     this.idleTimer = setTimeout(() => void this.unload(), idleMinutes * 60_000);
   }
 
-  /** FIFO: one local generation at a time. */
-  async *exclusive<T, R>(run: () => AsyncGenerator<T, R>, idleMinutes: number): AsyncGenerator<T, R> {
+  /** Wait for this caller's turn on the FIFO; call the returned function to pass it on. */
+  private async turn(): Promise<() => void> {
     let release!: () => void;
     const turn = new Promise<void>((r) => (release = r));
     const prev = this.queue;
     this.queue = prev.then(() => turn);
     await prev.catch(() => {});
+    return release;
+  }
+
+  /** Whether `ensure` would return the loaded engine as is. */
+  isLoaded(model: CatalogModel, pin: EngineId | "auto", maxContext: number): boolean {
+    const c = this.current;
+    return !!c && c.model.id === model.id && c.engine.id === this.resolveEngine(model, pin) && c.nCtx === this.contextSize(model, pin, maxContext);
+  }
+
+  /**
+   * `ensure` outside a generation. Sites can use different local models, so loading another one
+   * waits its turn on the FIFO rather than unloading a model mid-generation.
+   */
+  async ensureQueued(model: CatalogModel, pin: EngineId | "auto", maxContext: number, onProgress?: (f: number) => void): Promise<LocalEngine> {
+    if (this.isLoaded(model, pin, maxContext)) return this.ensure(model, pin, maxContext, onProgress);
+    const release = await this.turn();
+    try {
+      return await this.ensure(model, pin, maxContext, onProgress);
+    } finally {
+      release();
+    }
+  }
+
+  /** FIFO: one local generation at a time. */
+  async *exclusive<T, R>(run: () => AsyncGenerator<T, R>, idleMinutes: number): AsyncGenerator<T, R> {
+    const release = await this.turn();
     this.active++;
     clearTimeout(this.idleTimer);
     try {
@@ -220,7 +245,7 @@ export class LocalBackend implements Backend {
   }
 
   async prepare(onProgress?: (f: number) => void) {
-    await this.runtime.ensure(this.model, this.pin, this.maxContext, onProgress);
+    await this.runtime.ensureQueued(this.model, this.pin, this.maxContext, onProgress);
     this.runtime.touch(this.idleMinutes);
   }
 
@@ -243,7 +268,7 @@ export class LocalBackend implements Backend {
   }
 
   async countTokens(messages: ChatMessage[]) {
-    const engine = await this.runtime.ensure(this.model, this.pin, this.maxContext);
+    const engine = await this.runtime.ensureQueued(this.model, this.pin, this.maxContext);
     return engine.countTokens(messages);
   }
 

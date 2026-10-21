@@ -39,6 +39,9 @@ export interface CloudModel {
 
 export const PRICES_AS_OF = "2026-10-20";
 
+/** Context assumed for model ids outside the curated list (custom endpoints, ids the user typed). */
+export const UNLISTED_CONTEXT = 128_000;
+
 const CLAUDE: CloudInput[] = ["text", "image", "pdf"];
 const GPT: CloudInput[] = ["text", "image"];
 const GEMINI: CloudInput[] = ["text", "image", "audio", "video", "pdf"];

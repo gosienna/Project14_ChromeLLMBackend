@@ -8,6 +8,21 @@ import { openAIToolFields, openAITools, ToolCallAccumulator } from "../tools/ope
 import { parseSSE } from "./sse";
 import { dataUrl, guard, post, type Adapter } from "./types";
 
+/** OpenAI reasoning models (o-series, GPT-5 and later) reject any temperature but the default. */
+const OPENAI_REASONING = /^(?:o\d|gpt-(?:[5-9]|\d{2}))/;
+
+/**
+ * OpenAI itself takes `max_completion_tokens` on every model and rejects `max_tokens` on newer
+ * ones. Other compatible endpoints (Ollama, older servers) may only know `max_tokens`.
+ */
+export function openAIParams(providerId: string, model: string, temperature: number, maxTokens?: number): Record<string, number> {
+  if (providerId !== "openai") return { temperature, ...(maxTokens ? { max_tokens: maxTokens } : {}) };
+  return {
+    ...(OPENAI_REASONING.test(model) ? {} : { temperature }),
+    ...(maxTokens ? { max_completion_tokens: maxTokens } : {}),
+  };
+}
+
 export const openAICompatAdapter: Adapter = (cfg, messages, opts, signal, fetchImpl = fetch) =>
   guard(signal, (async function* (): AsyncGenerator<string, GenerateResult> {
     const headers: Record<string, string> = {};
@@ -21,8 +36,7 @@ export const openAICompatAdapter: Adapter = (cfg, messages, opts, signal, fetchI
         model: cfg.model,
         stream: true,
         stream_options: { include_usage: true },
-        temperature: opts.temperature,
-        ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+        ...openAIParams(cfg.provider.id, cfg.model, opts.temperature, opts.maxTokens),
         ...(opts.tools?.length ? { tools: openAITools(opts.tools) } : {}),
         messages: messages.map((m) => ({
           role: m.role,

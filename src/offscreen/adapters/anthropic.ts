@@ -10,6 +10,17 @@ import { guard, post, splitSystem, type Adapter } from "./types";
 
 type Block = Record<string, unknown>;
 
+/**
+ * Models that still take `temperature`: Claude 3, and Claude 4 up to 4.6 (dated ids too).
+ * Opus 4.7+, Sonnet 5+, Haiku 5.5, Fable and Mythos reject it with a 400, and so will newer
+ * models, so any id not matched here omits it.
+ */
+const TAKES_TEMPERATURE = /^claude-(?:3|(?:opus|sonnet|haiku)-4(?:-[0-6])?(?:-\d{8})?$)/;
+
+export function takesTemperature(model: string): boolean {
+  return TAKES_TEMPERATURE.test(model);
+}
+
 /** Anthropic turns. Tool results of one round go together in a user turn of tool_result blocks. */
 function anthropicMessages(messages: ChatMessage[]): Array<{ role: string; content: string | Block[] }> {
   const out: Array<{ role: string; content: string | Block[] }> = [];
@@ -58,7 +69,7 @@ export const anthropicAdapter: Adapter = (cfg, messages, opts, signal, fetchImpl
         model: cfg.model,
         max_tokens: opts.maxTokens ?? 4096,
         stream: true,
-        temperature: Math.min(opts.temperature, 1),
+        ...(takesTemperature(cfg.model) ? { temperature: Math.min(opts.temperature, 1) } : {}),
         ...(system ? { system } : {}),
         ...(opts.tools?.length ? { tools: opts.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })) } : {}),
         messages: anthropicMessages(rest),

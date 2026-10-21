@@ -56,6 +56,40 @@ test("prompt API round trip through the relay chain", async ({ context, sw }) =>
   expect(JSON.stringify(usage)).not.toContain("hello world"); // no prompt text in the log
 });
 
+test("localLLM.models lists what the site can run and create() picks one", async ({ context, sw }) => {
+  // Two custom endpoints on localhost (granted in the test build); the site may use only one.
+  await sw.evaluate(async () => {
+    const { settings } = await chrome.storage.local.get("settings");
+    const custom = (id: string, model: string) => ({ id, name: id, adapter: "openai-compat", baseUrl: "http://localhost:8790/v1", defaultModel: model, hostPattern: "http://localhost/*", keyRequired: false });
+    await chrome.storage.local.set({ settings: { ...settings, customProviders: [custom("custom-a", "model-a"), custom("custom-b", "model-b")] } });
+  });
+  await enable(sw, "always", { allowedBackends: ["local", "custom-a"] });
+  const page = await context.newPage();
+  await page.goto(PAGE);
+
+  const result = await page.evaluate(async () => {
+    const models = await (window as any).localLLM.models();
+    const s = await (window as any).LanguageModel.create({ model: "local:echo-test" });
+    const reply = await s.prompt("picked");
+    let unknown = "";
+    try { await (window as any).LanguageModel.create({ model: "custom-b:model-b" }); } catch (e) { unknown = (e as DOMException).name; }
+    return { models, reply, unknown };
+  });
+
+  expect(result.models.map((m: { id: string }) => m.id)).toEqual(["local:echo-test", "custom-a:model-a"]);
+  expect(result.models[0]).toMatchObject({ default: true, engine: "dummy", contextWindow: 4096, price: { input: 0, output: 0 } });
+  expect(result.models[1]).toMatchObject({ default: false, provider: "custom-a", contextWindow: 128_000, price: null });
+  expect(result.reply).toBe("Echo #1: picked");
+  expect(result.unknown).toBe("NotSupportedError");
+});
+
+test("a denied site lists no models", async ({ context, sw }) => {
+  await enable(sw, "deny");
+  const page = await context.newPage();
+  await page.goto(PAGE);
+  expect(await page.evaluate(() => (window as any).localLLM.models())).toEqual([]);
+});
+
 test("abort signal cancels a prompt", async ({ context, sw }) => {
   await enable(sw, "always");
   const page = await context.newPage();

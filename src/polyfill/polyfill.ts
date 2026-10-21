@@ -2,7 +2,7 @@
 // It holds no model: only request ids and promise/stream bookkeeping. Requests travel to the
 // isolated-world relay (bridge.ts) over a MessageChannel set up with a per-page nonce.
 
-import { MAX_TOOLS, TOOL_NAME, type ChatMessage, type DistributiveOmit, type ModelParams, type PageRequest, type PageResponse, type SessionInfo, type SessionOptions, type ToolDecl } from "../shared/protocol";
+import { MAX_TOOLS, TOOL_NAME, type ChatMessage, type DistributiveOmit, type ModelInfo, type ModelParams, type PageRequest, type PageResponse, type SessionInfo, type SessionOptions, type ToolDecl } from "../shared/protocol";
 
 declare const __OVERRIDE_NATIVE__: boolean;
 declare const __VERSION__: string;
@@ -220,6 +220,10 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
         const sys = sessionOptions.initialPrompts.findIndex((m) => m.role === "system");
         if (sys > 0) throw new TypeError("A system prompt must be the first initial prompt");
       }
+      if (options.model !== undefined) {
+        if (typeof options.model !== "string") throw new TypeError("model must be an id from localLLM.models()");
+        sessionOptions.model = options.model;
+      }
       if (options.temperature !== undefined) sessionOptions.temperature = options.temperature;
       if (options.topK !== undefined) sessionOptions.topK = options.topK;
       if ((options.temperature === undefined) !== (options.topK === undefined)) {
@@ -340,6 +344,8 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
     version: __VERSION__,
     overridesNative: hasNative,
     info: () => request<{ name: string; backend: string; images: boolean; tools: "native" | "prompted"; version: string }>({ kind: "info" }),
+    /** Models this site can run now; pass an id to LanguageModel.create({ model }). */
+    models: () => request<ModelInfo[]>({ kind: "models" }),
   });
   Object.defineProperty(window, "localLLM", { value: localLLM, writable: false, configurable: true });
   window.dispatchEvent(new Event("localllm:ready"));

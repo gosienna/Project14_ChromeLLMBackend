@@ -16,6 +16,17 @@ describe("parsePageRequest", () => {
     expect(parsePageRequest({ kind: "abort", id: "r4", target: "r3" })).toBeTruthy();
   });
 
+  it("accepts models requests and a model id on create", () => {
+    expect(parsePageRequest({ kind: "models", id: "r1" })).toBeTruthy();
+    expect(parsePageRequest({ kind: "models", id: "r1", backend: "anthropic" })).toBeNull();
+    const create = (model: unknown) => parsePageRequest({ kind: "create", id: "r1", options: { model }, monitor: false });
+    expect(create("openrouter:meta/llama-3:free")).toBeTruthy();
+    expect(create(5)).toBeNull();
+    expect(create("")).toBeNull();
+    expect(create("x".repeat(257))).toBeNull();
+    expect(create("local:a\nb")).toBeNull();
+  });
+
   it("drops unknown kinds and extra fields", () => {
     expect(parsePageRequest({ kind: "readTabs", id: "r1" })).toBeNull();
     expect(parsePageRequest({ kind: "availability", id: "r1", origin: "https://evil.example" })).toBeNull();

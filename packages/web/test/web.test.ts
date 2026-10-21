@@ -34,6 +34,14 @@ describe("@local-llm/web", () => {
     expect(detect()).toBe("extension");
   });
 
+  it("lists the extension's models, none for native", async () => {
+    const w = fakeWindow();
+    w.LanguageModel = fakeLM();
+    expect(await (await getLanguageModel({ timeout: 10 }))!.models()).toEqual([]);
+    w.localLLM = { info: async () => null, models: async () => [{ id: "local:echo-test" }] };
+    expect(await (await getLanguageModel({ timeout: 10 }))!.models()).toEqual([{ id: "local:echo-test" }]);
+  });
+
   it("waits for the extension's ready event", async () => {
     const w = fakeWindow();
     const p = getLanguageModel({ timeout: 1000 });

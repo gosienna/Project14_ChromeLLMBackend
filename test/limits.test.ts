@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TokenRateLimiter, estimateCost, providerTokensThisMonth, siteTokensToday } from "../src/background/limits";
+import { TokenRateLimiter, estimateCost, exceedsDailyTokenCap, providerTokensThisMonth, siteTokensToday } from "../src/background/limits";
 
 describe("TokenRateLimiter", () => {
   it("enforces a sliding one-minute window per origin", () => {
@@ -23,6 +23,11 @@ describe("spend caps", () => {
     { origin: "https://a.com", backend: "openai", time: new Date(2026, 8, 30).getTime(), inputTokens: 999, outputTokens: 0 },
   ];
   it("counts today's tokens per site", () => expect(siteTokensToday(usage, "https://a.com", now)).toBe(15));
+  it("treats an unlimited daily cap as never exceeded", () => {
+    expect(exceedsDailyTokenCap(15, 10)).toBe(true);
+    expect(exceedsDailyTokenCap(15, 200_000)).toBe(false);
+    expect(exceedsDailyTokenCap(15, 10, true)).toBe(false);
+  });
   it("counts this month's tokens per provider", () => expect(providerTokensThisMonth(usage, "openai", now)).toBe(152));
   it("estimates cost for cloud only", () => {
     expect(estimateCost(usage[0])).toBe(0);

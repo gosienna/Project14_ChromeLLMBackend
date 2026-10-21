@@ -86,8 +86,22 @@ async function sitesSection(): Promise<HTMLElement> {
 
     const cap = h("input", {
       type: "number", min: 0, step: 1000, value: site.dailyTokenCap,
-      onchange: async (e) => updateSite(site.origin, (s) => ({ ...s, dailyTokenCap: Number((e.target as HTMLInputElement).value) })),
+      disabled: !!site.dailyTokenUnlimited,
+      onchange: async (e) => {
+        const n = Number((e.target as HTMLInputElement).value);
+        if (!Number.isFinite(n) || n < 0) return;
+        await updateSite(site.origin, (s) => ({ ...s, dailyTokenCap: n }));
+      },
     });
+    const unlimited = h("label", { class: "small" }, h("input", {
+      type: "checkbox",
+      checked: !!site.dailyTokenUnlimited,
+      onchange: async (e) => {
+        const on = (e.target as HTMLInputElement).checked;
+        cap.disabled = on;
+        await updateSite(site.origin, (s) => ({ ...s, dailyTokenUnlimited: on }));
+      },
+    }), "Unlimited");
     const fallback = h("label", { class: "small" }, h("input", {
       type: "checkbox", checked: site.allowFallback,
       onchange: async (e) => updateSite(site.origin, (s: SiteConfig) => ({ ...s, allowFallback: (e.target as HTMLInputElement).checked })),
@@ -97,7 +111,7 @@ async function sitesSection(): Promise<HTMLElement> {
       h("td", {}, h("code", {}, site.origin)),
       h("td", {}, consent),
       h("td", {}, backendSel, allowed, fallback),
-      h("td", {}, cap),
+      h("td", {}, h("div", { class: "row" }, cap, unlimited)),
       h("td", {},
         h("div", { class: "row" },
           h("button", { onclick: async () => { await send({ type: "site:reset-consent", origin: site.origin }); render(); } }, "Reset consent"),

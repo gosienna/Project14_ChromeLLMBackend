@@ -51,6 +51,56 @@ export interface SessionOptions {
   temperature?: number;
   topK?: number;
   tools?: ToolDecl[];
+  /**
+   * A ModelInfo id from localLLM.models(). The router accepts only ids in the list it builds for
+   * the site itself, and removes the field before the request reaches the host.
+   */
+  model?: string;
+}
+
+/** USD per million tokens, as in shared/cloud-models.ts. Local models cost 0. */
+export interface ModelPrice {
+  input: number;
+  output: number;
+  cachedInput?: number;
+  /** Higher rates for the whole request once the prompt exceeds `above` tokens. */
+  long?: { above: number; input: number; output: number };
+  note?: string;
+  /** Date the price was checked (cloud only). */
+  asOf?: string;
+}
+
+/** A model a site can run right now, as localLLM.models() reports it. */
+export interface ModelInfo {
+  /** "local:<catalog id>" or "<provider id>:<provider's model id>"; pass to create({ model }). */
+  id: string;
+  name: string;
+  /** "local" or a provider id. */
+  backend: string;
+  /** "Local" or the provider's name. */
+  provider: string;
+  /** Local models: the engine that runs it ("transformers" | "webllm" | "wllama" | "nano" | "dummy"). */
+  engine?: string;
+  /** What create() uses without a `model`. */
+  default: boolean;
+  /** What the model takes: "text", "image", "audio", "video", "pdf". Pages send text only. */
+  input: string[];
+  output: string[];
+  /** The model's maximum context in tokens. */
+  contextWindow: number;
+  /** Context a session gets: the smaller of contextWindow and the user's limit. */
+  inputQuota: number;
+  /** Longest reply a session allows: the model's own limit where stated, the user's limit and inputQuota. */
+  maxOutputTokens: number;
+  /** Thinks before answering: "hybrid" can be told not to, "always" cannot. */
+  reasoning?: "hybrid" | "always";
+  tools: "native" | "prompted";
+  /** Null when unknown or set by a router's choice of model. */
+  price: ModelPrice | null;
+  /** Local download size. */
+  sizeMB?: number;
+  /** Older but still served. */
+  legacy?: boolean;
 }
 
 export interface ModelParams {
@@ -74,6 +124,8 @@ export type PageRequest =
   | { kind: "availability"; id: string }
   | { kind: "params"; id: string }
   | { kind: "info"; id: string }
+  /** Models the site may run right now (ModelInfo[]). */
+  | { kind: "models"; id: string }
   | { kind: "create"; id: string; options: SessionOptions; monitor: boolean }
   | { kind: "clone"; id: string; sessionId: string }
   | { kind: "prompt"; id: string; sessionId: string; input: ChatMessage[]; stream: boolean }
@@ -128,6 +180,7 @@ export const MAX_IMAGES_PER_MESSAGE = 8;
 export const MAX_TOOLS = 32;
 const MAX_TOOL_DESCRIPTION = 4096;
 const MAX_TOOL_SCHEMA = 65_536;
+const MAX_MODEL_ID = 256;
 export const TOOL_NAME = /^[A-Za-z_][\w-]{0,63}$/;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -182,11 +235,16 @@ function isTools(v: unknown): v is ToolDecl[] {
   return true;
 }
 
+/** Only compared against the router's own list, so the check is about size and printable text. */
+const isModelId = (v: unknown): v is string =>
+  typeof v === "string" && v.length > 0 && v.length <= MAX_MODEL_ID && !/[\u0000-\u001f\u007f]/.test(v);
+
 function isSessionOptions(v: unknown): v is SessionOptions {
   if (!isObj(v)) return false;
-  if (Object.keys(v).some((k) => !["initialPrompts", "temperature", "topK", "tools"].includes(k))) return false;
+  if (Object.keys(v).some((k) => !["initialPrompts", "temperature", "topK", "tools", "model"].includes(k))) return false;
   if (v.initialPrompts !== undefined && !isMessages(v.initialPrompts, false)) return false;
   if (v.tools !== undefined && !isTools(v.tools)) return false;
+  if (v.model !== undefined && !isModelId(v.model)) return false;
   return isOptNum(v.temperature, 0, 2) && isOptNum(v.topK, 1, 1000);
 }
 
@@ -194,6 +252,7 @@ const FIELDS: Record<PageRequestKind, string[]> = {
   availability: [],
   params: [],
   info: [],
+  models: [],
   create: ["options", "monitor"],
   clone: ["sessionId"],
   prompt: ["sessionId", "input", "stream"],
@@ -219,6 +278,7 @@ export function parsePageRequest(v: unknown, { images = false }: { images?: bool
     case "availability":
     case "params":
     case "info":
+    case "models":
       return v as PageRequest;
     case "create":
       return isSessionOptions(v.options) && typeof v.monitor === "boolean" ? (v as PageRequest) : null;

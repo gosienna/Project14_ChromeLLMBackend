@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ALL_CAPS, CATALOG, WLLAMA_HEAP_MAX_MB, autoSelectEngine, canRun, contextLimit, findModel, ioLabel, takesImages, toolMode, whyNot, type DeviceCaps, type EngineId } from "../src/shared/catalog";
+import { ALL_CAPS, CATALOG, WLLAMA_HEAP_MAX_MB, autoSelectEngine, canRun, resolveEngine, contextLimit, findModel, ioLabel, takesImages, toolMode, whyNot, type DeviceCaps, type EngineId } from "../src/shared/catalog";
 import { hostPatternFor } from "../src/shared/providers";
 import { normalizeOrigin } from "../src/shared/settings";
 import { AsyncQueue } from "../src/shared/async-queue";
@@ -15,6 +15,11 @@ describe("engine auto-selection", () => {
   it("uses Transformers.js with WebGPU when no MLC build", () => expect(autoSelectEngine({ ...m, mlc: undefined }, GPU)).toBe("transformers"));
   it("falls back to wllama without WebGPU", () => expect(autoSelectEngine(m, CPU)).toBe("wllama"));
   it("returns null when nothing can run", () => expect(autoSelectEngine({ ...m, gguf: undefined }, CPU)).toBeNull());
+  it("honors a pin the device can run", () => {
+    expect(resolveEngine(m, "wllama", GPU)).toBe("wllama");
+    expect(resolveEngine(m, "webllm", CPU)).toBeNull();
+    expect(resolveEngine(m, "auto", GPU)).toBe("webllm");
+  });
 });
 
 describe("large GGUF models", () => {

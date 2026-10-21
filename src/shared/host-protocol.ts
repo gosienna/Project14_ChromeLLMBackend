@@ -53,6 +53,8 @@ export interface HostStatus {
   loaded: { modelId: string; engine: EngineId } | null;
   downloading: string | null;
   downloaded: string[];
+  /** Chrome's built-in Prompt API is present in the host. */
+  nano: boolean;
   sessions: Record<string, number>;
   crossOriginIsolated: boolean;
 }

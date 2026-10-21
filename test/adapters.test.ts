@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { anthropicAdapter } from "../src/offscreen/adapters/anthropic";
+import { anthropicAdapter, takesTemperature } from "../src/offscreen/adapters/anthropic";
 import { geminiAdapter } from "../src/offscreen/adapters/gemini";
-import { openAICompatAdapter } from "../src/offscreen/adapters/openai-compat";
+import { openAICompatAdapter, openAIParams } from "../src/offscreen/adapters/openai-compat";
 import type { Adapter } from "../src/offscreen/adapters/types";
 import type { ChatMessage } from "../src/shared/protocol";
 import { BUILTIN_PROVIDERS } from "../src/shared/providers";
@@ -58,6 +58,18 @@ describe("anthropicAdapter", () => {
     const { f: f2 } = mockFetch("slow down", 429);
     await expect(run(anthropicAdapter, "anthropic", f2)).rejects.toMatchObject({ name: "QuotaExceededError" });
   });
+
+  it("sends temperature only to models that still take it", async () => {
+    for (const id of ["claude-3-5-sonnet-20241022", "claude-opus-4-20250514", "claude-opus-4-1-20250805", "claude-sonnet-4-6", "claude-haiku-4-5"]) {
+      expect(takesTemperature(id), id).toBe(true);
+    }
+    for (const id of ["claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5", "claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1", "m"]) {
+      expect(takesTemperature(id), id).toBe(false);
+    }
+    const { f, calls } = mockFetch(sse([{ type: "message_stop" }]));
+    await run(anthropicAdapter, "anthropic", f);
+    expect(JSON.parse(calls[0].init.body as string)).not.toHaveProperty("temperature");
+  });
 });
 
 describe("openAICompatAdapter", () => {
@@ -81,6 +93,16 @@ describe("openAICompatAdapter", () => {
       return new Response("");
     }) as unknown as typeof fetch;
     await expect(run(openAICompatAdapter, "openai", f, ac.signal)).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("uses max_completion_tokens on OpenAI and drops temperature for its reasoning models", () => {
+    expect(openAIParams("openai", "gpt-6-luna", 0.5, 100)).toEqual({ max_completion_tokens: 100 });
+    expect(openAIParams("openai", "gpt-5.4-mini", 0.5, 100)).toEqual({ max_completion_tokens: 100 });
+    expect(openAIParams("openai", "o4-mini", 0.5)).toEqual({});
+    expect(openAIParams("openai", "gpt-4.1-mini", 0.5, 100)).toEqual({ temperature: 0.5, max_completion_tokens: 100 });
+    // Other compatible endpoints keep the classic fields.
+    expect(openAIParams("xai", "grok-4.3", 0.5, 100)).toEqual({ temperature: 0.5, max_tokens: 100 });
+    expect(openAIParams("custom-ollama", "gpt-oss", 0.5, 100)).toEqual({ temperature: 0.5, max_tokens: 100 });
   });
 });
 

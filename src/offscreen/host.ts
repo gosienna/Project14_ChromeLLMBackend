@@ -7,6 +7,7 @@ import type { AdminOp, BackendSpec, FromHost, HostRequest, HostStatus, ToHost } 
 import { randomId, type ChatMessage, type DistributiveOmit, type PageResponse, type SessionInfo, type ToolCall, type ToolDecl, type Usage } from "../shared/protocol";
 import type { Backend } from "./backend";
 import { CloudBackend } from "./cloud-backend";
+import { nanoSupported } from "./engines/nano";
 import { LocalBackend, LocalRuntime } from "./local-runtime";
 import { withTools } from "./tools/with-tools";
 import { sanitizeTrace } from "./trace";
@@ -320,6 +321,7 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
         loaded: runtime.loaded,
         downloading: runtime.downloadingKey,
         downloaded: runtime.downloaded(),
+        nano: nanoSupported(),
         sessions: sessionCounts(),
         crossOriginIsolated: self.crossOriginIsolated,
       };

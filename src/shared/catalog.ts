@@ -1195,7 +1195,7 @@ export const ALL_CAPS: DeviceCaps = { webgpu: true, maxBufferMB: Infinity, jspi:
  */
 export const WLLAMA_HEAP_MAX_MB = 3500;
 
-const ENGINE_PREFERENCE: EngineId[] = ["webllm", "transformers", "wllama"];
+export const ENGINE_PREFERENCE: EngineId[] = ["webllm", "transformers", "wllama"];
 
 /** Auto-selection: WebGPU -> first of WebLLM, Transformers.js, wllama that can run the model; no WebGPU -> wllama. */
 export function autoSelectEngine(model: CatalogModel, caps: DeviceCaps): EngineId | null {
@@ -1203,6 +1203,12 @@ export function autoSelectEngine(model: CatalogModel, caps: DeviceCaps): EngineI
   if (model.nano) return "nano";
   const order: EngineId[] = caps.webgpu ? ENGINE_PREFERENCE : ["wllama"];
   return order.find((e) => canRun(model, e, caps)) ?? null;
+}
+
+/** The engine a model runs on: its pin if that build can run here, else auto-selection. */
+export function resolveEngine(model: CatalogModel, pin: EngineId | "auto", caps: DeviceCaps): EngineId | null {
+  if (pin !== "auto") return canRun(model, pin, caps) ? pin : null;
+  return autoSelectEngine(model, caps);
 }
 
 export function canRun(model: CatalogModel, engine: EngineId, caps: DeviceCaps): boolean {

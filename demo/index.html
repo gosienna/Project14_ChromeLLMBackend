@@ -26,6 +26,7 @@
   <h1>Prompt API conformance</h1>
   <p class="muted">Runs the same checks against whatever provides <code>window.LanguageModel</code> on this page: Chrome's native model or the Local LLM extension. Enable this site in the extension first.</p>
   <p id="source">Detecting…</p>
+  <div class="wrap" id="models" hidden><table><thead><tr><th>Model (<code>localLLM.models()</code>)</th><th>Backend</th><th>Input → output</th><th>Context</th><th>Price in / out per 1M</th></tr></thead><tbody id="model-rows"></tbody></table></div>
   <button id="run" disabled>Run checks</button>
   <div class="wrap"><table><thead><tr><th>Check</th><th>Result</th><th>Detail</th><th>ms</th></tr></thead><tbody id="rows"></tbody></table></div>
 </main>
@@ -43,10 +44,28 @@
     if (window.localLLM) {
       const info = await window.localLLM.info().catch(() => null);
       source.textContent = `Provider: Local LLM extension ${info ? `— ${info.name} on ${info.backend} (v${info.version})` : ""}`;
+      showModels(await window.localLLM.models?.().catch(() => []) ?? []);
     } else {
       source.textContent = "Provider: Chrome native Prompt API";
     }
     btn.disabled = false;
+  }
+
+  /** The models this site can run now, with the default marked. */
+  function showModels(models) {
+    const tbody = document.getElementById("model-rows");
+    const usd = (n) => `$${n}`;
+    tbody.replaceChildren(...models.map((m) => {
+      const tr = document.createElement("tr");
+      const price = m.price ? `${usd(m.price.input)} / ${usd(m.price.output)}` : "varies";
+      for (const text of [`${m.name}${m.default ? " (default)" : ""}`, m.engine ? `${m.provider} · ${m.engine}` : m.provider, `${m.input.join("+")} → ${m.output.join("+")}`, `${m.inputQuota.toLocaleString()} of ${m.contextWindow.toLocaleString()}`, price]) {
+        const td = document.createElement("td");
+        td.textContent = text;
+        tr.append(td);
+      }
+      return tr;
+    }));
+    document.getElementById("models").hidden = !models.length;
   }
 
   btn.onclick = async () => {
