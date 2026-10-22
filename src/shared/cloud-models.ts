@@ -22,6 +22,8 @@ export interface CloudModel {
   /** What the model accepts; output is text for every listed model. The adapters send text and images only. */
   input: CloudInput[];
   contextWindow: number;
+  /** Prompt cap when it is smaller than the context window. Absent: the whole window may be input. */
+  maxInput?: number;
   maxOutput?: number;
   /** Reasoning model: "hybrid" can be told not to think; "always" cannot. */
   reasoning?: "hybrid" | "always";
@@ -68,15 +70,15 @@ export const CLOUD_MODELS: Record<string, CloudModel[]> = {
       price: { input: 1, output: 5, cachedInput: 0.1 } },
   ],
   openai: [
-    { id: "gpt-6-astra", name: "GPT-6 Astra", input: GPT, contextWindow: 1_050_000, maxOutput: 128_000, reasoning: "always", tools: "prompted",
+    { id: "gpt-6-astra", name: "GPT-6 Astra", input: GPT, contextWindow: 1_050_000, maxInput: 922_000, maxOutput: 128_000, reasoning: "always", tools: "prompted",
       price: { input: 10, output: 50, cachedInput: 1, long: openAILong(20, 75) } },
-    { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", input: GPT, contextWindow: 1_050_000, maxOutput: 128_000, reasoning: "always", tools: "prompted",
+    { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", input: GPT, contextWindow: 1_050_000, maxInput: 922_000, maxOutput: 128_000, reasoning: "always", tools: "prompted",
       price: { input: 2, output: 10, cachedInput: 0.1, long: openAILong(4, 15) } },
-    { id: "gpt-6-luna", name: "GPT-6 Luna", input: GPT, contextWindow: 1_050_000, maxOutput: 128_000, reasoning: "hybrid", tools: "prompted",
+    { id: "gpt-6-luna", name: "GPT-6 Luna", input: GPT, contextWindow: 1_050_000, maxInput: 922_000, maxOutput: 128_000, reasoning: "hybrid", tools: "prompted",
       price: { input: 0.1, output: 0.5, cachedInput: 0.01, long: openAILong(0.2, 0.75) } },
-    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", input: GPT, contextWindow: 1_050_000, maxOutput: 128_000, reasoning: "hybrid", tools: "native",
+    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", input: GPT, contextWindow: 1_050_000, maxInput: 922_000, maxOutput: 128_000, reasoning: "hybrid", tools: "native",
       price: { input: 2, output: 12, cachedInput: 0.2, long: openAILong(4, 18) } },
-    { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", input: GPT, contextWindow: 1_050_000, maxOutput: 128_000, reasoning: "hybrid", tools: "native",
+    { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", input: GPT, contextWindow: 1_050_000, maxInput: 922_000, maxOutput: 128_000, reasoning: "hybrid", tools: "native",
       price: { input: 0.2, output: 1.2, cachedInput: 0.02, long: openAILong(0.4, 1.8) } },
     { id: "gpt-5.4-mini", name: "GPT-5.4 mini", input: GPT, contextWindow: 400_000, maxOutput: 128_000, reasoning: "hybrid", tools: "native", legacy: true,
       price: { input: 0.75, output: 4.5, cachedInput: 0.075 } },
@@ -102,13 +104,15 @@ export const CLOUD_MODELS: Record<string, CloudModel[]> = {
       price: { input: 0.1, output: 0.4, note: "only for accounts that used 2.5 before" } },
   ],
   xai: [
-    { id: "grok-4.7", name: "Grok 4.7", input: GROK, contextWindow: 500_000, reasoning: "always", tools: "native",
+    // Chat Completions takes max_completion_tokens. The documented output default is 128K;
+    // a context-sized value is rejected the same way Claude rejects one above its output cap.
+    { id: "grok-4.7", name: "Grok 4.7", input: GROK, contextWindow: 500_000, maxOutput: 128_000, reasoning: "always", tools: "native",
       price: { input: 2, output: 6, cachedInput: 0.5, long: grokLong(4, 12) } },
-    { id: "grok-4.3", name: "Grok 4.3", input: GROK, contextWindow: 1_000_000, reasoning: "hybrid", tools: "native",
+    { id: "grok-4.3", name: "Grok 4.3", input: GROK, contextWindow: 1_000_000, maxOutput: 128_000, reasoning: "hybrid", tools: "native",
       price: { input: 1.25, output: 2.5, cachedInput: 0.2, long: grokLong(2.5, 5) } },
-    { id: "grok-4.20-0309-reasoning", name: "Grok 4.20 Reasoning", input: GROK, contextWindow: 1_000_000, reasoning: "always", tools: "native", legacy: true,
+    { id: "grok-4.20-0309-reasoning", name: "Grok 4.20 Reasoning", input: GROK, contextWindow: 1_000_000, maxOutput: 128_000, reasoning: "always", tools: "native", legacy: true,
       price: { input: 1.25, output: 2.5, long: grokLong(2.5, 5) } },
-    { id: "grok-4.20-0309-non-reasoning", name: "Grok 4.20", input: GROK, contextWindow: 1_000_000, tools: "native", legacy: true,
+    { id: "grok-4.20-0309-non-reasoning", name: "Grok 4.20", input: GROK, contextWindow: 1_000_000, maxOutput: 128_000, tools: "native", legacy: true,
       price: { input: 1.25, output: 2.5, long: grokLong(2.5, 5) } },
   ],
   deepseek: [
@@ -119,16 +123,17 @@ export const CLOUD_MODELS: Record<string, CloudModel[]> = {
       price: { input: 1.32, output: 3.96, cachedInput: 0.044, note: "half price off-peak (outside 09–12, 14–18 Beijing time on weekdays)" } },
   ],
   openrouter: [
-    { id: "openrouter/auto", name: "Auto Router", input: ["text", "image", "audio", "video", "pdf"], contextWindow: 2_000_000, tools: "native" },
-    { id: "anthropic/claude-sonnet-5.5", name: "Claude Sonnet 5.5", input: CLAUDE, contextWindow: 1_000_000, reasoning: "hybrid", tools: "native",
+    // The routed model may have a 1M window, so an uncapped max_tokens (≈2M) is rejected.
+    { id: "openrouter/auto", name: "Auto Router", input: ["text", "image", "audio", "video", "pdf"], contextWindow: 2_000_000, maxOutput: 65_536, tools: "native" },
+    { id: "anthropic/claude-sonnet-5.5", name: "Claude Sonnet 5.5", input: CLAUDE, contextWindow: 1_000_000, maxOutput: 128_000, reasoning: "hybrid", tools: "native",
       price: { input: 2, output: 10 } },
-    { id: "openai/gpt-6.1-sol", name: "GPT-6.1 Sol", input: ["text", "image", "pdf"], contextWindow: 1_050_000, reasoning: "always", tools: "native",
+    { id: "openai/gpt-6.1-sol", name: "GPT-6.1 Sol", input: ["text", "image", "pdf"], contextWindow: 1_050_000, maxInput: 922_000, maxOutput: 128_000, reasoning: "always", tools: "native",
       price: { input: 2, output: 10 } },
-    { id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash", input: GEMINI, contextWindow: 1_048_576, reasoning: "always", tools: "native",
+    { id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash", input: GEMINI, contextWindow: 1_048_576, maxOutput: 65_536, reasoning: "always", tools: "native",
       price: { input: 0.825, output: 4.125 } },
-    { id: "x-ai/grok-4.7", name: "Grok 4.7", input: ["text", "image", "pdf"], contextWindow: 500_000, reasoning: "always", tools: "native",
+    { id: "x-ai/grok-4.7", name: "Grok 4.7", input: ["text", "image", "pdf"], contextWindow: 500_000, maxOutput: 128_000, reasoning: "always", tools: "native",
       price: { input: 2, output: 6 } },
-    { id: "deepseek/deepseek-v4.1-flash-1017", name: "DeepSeek V4.1 Flash", input: ["text", "image"], contextWindow: 1_048_576, reasoning: "hybrid", tools: "native",
+    { id: "deepseek/deepseek-v4.1-flash-1017", name: "DeepSeek V4.1 Flash", input: ["text", "image"], contextWindow: 1_048_576, maxOutput: 384_000, reasoning: "hybrid", tools: "native",
       price: { input: 0.3, output: 1.2 } },
     { id: "qwen/qwen3.8-max-0902", name: "Qwen3.8 Max", input: ["text", "image", "video"], contextWindow: 1_000_000, reasoning: "hybrid", tools: "native",
       price: { input: 2, output: 6 } },
@@ -141,6 +146,17 @@ export function cloudModels(providerId: string): CloudModel[] {
 
 export function findCloudModel(providerId: string, modelId: string): CloudModel | undefined {
   return cloudModels(providerId).find((m) => m.id === modelId);
+}
+
+/**
+ * Integer output budget for one request. Listed models cannot exceed `maxOutput`: Gemini
+ * streamGenerateContent rejects maxOutputTokens above 65536, and Grok's chat field is capped
+ * at its 128K output default. Unknown ids are only floored.
+ */
+export function cappedOutputTokens(providerId: string, model: string, requested: number | undefined, fallback: number): number {
+  const cap = findCloudModel(providerId, model)?.maxOutput;
+  const n = Math.max(1, Math.floor(requested ?? fallback));
+  return cap ? Math.min(n, cap) : n;
 }
 
 export const takesCloudImages = (m: CloudModel) => m.input.includes("image");

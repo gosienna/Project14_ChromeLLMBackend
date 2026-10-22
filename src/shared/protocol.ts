@@ -93,7 +93,7 @@ export interface ModelInfo {
   output: string[];
   /** The model's maximum context in tokens. */
   contextWindow: number;
-  /** Context a session gets: the smaller of contextWindow and the user's limit. */
+  /** Context a session gets: the smaller of the model's input cap and the user's limit. */
   inputQuota: number;
   /** Longest reply a session allows: the model's own limit where stated, the user's limit and inputQuota. */
   maxOutputTokens: number;

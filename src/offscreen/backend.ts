@@ -47,6 +47,10 @@ export interface Backend {
   /** Load or download what is needed. Progress is a fraction 0..1. */
   prepare(onProgress?: (fraction: number) => void): Promise<void>;
   contextWindow(): number;
+  /** Prompt cap when it is smaller than the context window. Absent: the whole window may be input. */
+  maxInput?(): number | undefined;
+  /** Output cap when the model cannot fill the context still free. Absent means no extra cap. */
+  maxOutput?(): number | undefined;
   /** Whether user turns may carry images. Cloud models that lack vision fail at the provider. */
   acceptsImages(): boolean;
   params(): ModelParams;

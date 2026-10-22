@@ -19,6 +19,8 @@ describe("cloud model list", () => {
       for (const m of models) {
         expect(m.input).toContain("text");
         expect(m.contextWindow).toBeGreaterThan(0);
+        if (m.maxInput) expect(m.maxInput).toBeLessThanOrEqual(m.contextWindow);
+        if (m.maxOutput) expect(m.maxOutput).toBeLessThanOrEqual(m.contextWindow);
         if (!m.price) continue;
         expect(m.price.input).toBeGreaterThanOrEqual(0);
         expect(m.price.output).toBeGreaterThanOrEqual(m.price.input);
@@ -53,6 +55,11 @@ describe("CloudBackend capabilities", () => {
   it("come from the model list", () => {
     const sol = backend("openai", "gpt-6.1-sol");
     expect(sol.contextWindow()).toBe(1_050_000);
+    expect(sol.maxInput()).toBe(922_000);
+    expect(sol.maxOutput()).toBe(128_000);
+    expect(backend("anthropic", "claude-opus-5-5").maxInput()).toBeUndefined();
+    expect(backend("xai", "grok-4.3").maxOutput()).toBe(128_000);
+    expect(backend("gemini", "gemini-3.8-flash").maxOutput()).toBe(65_536);
     expect(sol.toolMode()).toBe("prompted");
     expect(backend("openai", "gpt-5.6-terra").toolMode()).toBe("native");
     expect(backend("deepseek", "deepseek-v4-pro").acceptsImages()).toBe(false);

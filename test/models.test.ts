@@ -111,6 +111,8 @@ describe("cloud models", () => {
     expect(local).toMatchObject({ contextWindow: 40960, inputQuota: 40960 });
     const cloud = listModels(input({ settings: s, site: cloudSite, providers: [anthropic] })).find((x) => x.id === "anthropic:claude-haiku-5-5")!;
     expect(cloud.inputQuota).toBe(cloud.contextWindow);
+    const gpt = listModels(input({ settings: s, site: site({ allowedBackends: ["openai"], backend: "openai" }), providers: [openai] })).find((x) => x.id === "openai:gpt-6-luna")!;
+    expect(gpt).toMatchObject({ contextWindow: 1_050_000, inputQuota: 922_000 });
   });
 
   it("lets a reply use the context left when output is unlimited", () => {

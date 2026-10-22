@@ -120,19 +120,41 @@ function destroySession(s: Session) {
 /**
  * Drop the oldest non-system turns until the conversation fits the quota. Turns from `keepFrom`
  * on are never dropped (by default the newest). A tool call goes together with its results, so
- * no result is left without the call it answers.
+ * no result is left without the call it answers. What still does not fit is cut from the system
+ * prompt, then from earlier turns: Gemini and the other cloud models reject the whole request
+ * when the prompt is over the input cap.
  */
 async function fitToQuota(s: Session, messages: ChatMessage[], keepFrom = messages.length - 1): Promise<{ messages: ChatMessage[]; tokens: number }> {
-  let msgs = messages;
-  let tokens = await s.backend.countTokens(msgs);
-  while (tokens > s.quota) {
+  return fitMessages(s.backend, messages, s.quota, keepFrom);
+}
+
+async function fitMessages(backend: Backend, messages: ChatMessage[], quota: number, keepFrom = messages.length - 1): Promise<{ messages: ChatMessage[]; tokens: number }> {
+  let msgs = messages.map((m) => ({ ...m }));
+  let tokens = await backend.countTokens(msgs);
+  while (tokens > quota) {
     const i = msgs.findIndex((m, idx) => m.role !== "system" && idx < keepFrom - (messages.length - msgs.length));
-    if (i < 0) throw new LLMError("QuotaExceededError", `Input (${tokens} tokens) exceeds the session quota (${s.quota})`);
+    if (i < 0) break;
     let n = 1;
     while (msgs[i + n]?.role === "tool") n++;
     msgs = [...msgs.slice(0, i), ...msgs.slice(i + n)];
-    tokens = await s.backend.countTokens(msgs);
+    tokens = await backend.countTokens(msgs);
   }
+  const clipOrder = [
+    ...msgs.map((m, i) => (m.role === "system" ? i : -1)).filter((i) => i >= 0),
+    ...msgs.map((m, i) => (m.role === "system" ? -1 : i)).filter((i) => i >= 0),
+  ];
+  for (const index of clipOrder) {
+    if (tokens <= quota) break;
+    let content = msgs[index].content;
+    for (let n = 0; n < 12 && tokens > quota && content.length > 0; n++) {
+      const next = Math.floor(content.length * (quota / tokens) * 0.9);
+      if (next >= content.length) break;
+      content = content.slice(0, Math.max(0, next));
+      msgs[index] = { ...msgs[index], content };
+      tokens = await backend.countTokens(msgs);
+    }
+  }
+  if (tokens > quota) throw new LLMError("QuotaExceededError", `Input (${tokens} tokens) exceeds the session quota (${quota})`);
   return { messages: msgs, tokens };
 }
 
@@ -200,24 +222,26 @@ async function handle(req: HostRequest): Promise<void> {
       }
       if (controller.signal.aborted) throw new LLMError("AbortError", "Aborted");
       const p = backend.params();
-      const history = r.options.initialPrompts ?? [];
       const tools = r.options.tools?.length ? r.options.tools : undefined;
+      const ready = tools ? withTools(backend) : backend;
+      const quota = Math.min(ready.maxInput?.() ?? ready.contextWindow(), receivedCap(req.limits.maxContext));
+      const initial = r.options.initialPrompts ?? [];
+      const fitted = initial.length ? await fitMessages(ready, initial, quota, initial.length) : { messages: [], tokens: 0 };
       const s: Session = {
         id: randomId(),
         origin: req.origin,
         owner: req.owner,
         backendId: picked.id,
-        backend: tools ? withTools(backend) : backend,
-        history,
+        backend: ready,
+        history: fitted.messages,
         tools,
         temperature: r.options.temperature ?? p.defaultTemperature,
         topK: Math.min(r.options.topK ?? p.defaultTopK, p.maxTopK),
-        quota: Math.min(backend.contextWindow(), receivedCap(req.limits.maxContext)),
-        usage: history.length ? await backend.countTokens(history) : 0,
+        quota,
+        usage: fitted.tokens,
         running: new Set(),
         chain: Promise.resolve(),
       };
-      if (s.usage > s.quota) throw new LLMError("QuotaExceededError", "Initial prompts exceed the context window");
       sessions.set(s.id, s);
       sessionsChanged();
       return respond(rid, { kind: "result", value: info(s) }, { sessionBackend: s.backendId });
@@ -256,7 +280,7 @@ async function handle(req: HostRequest): Promise<void> {
             {
               temperature: s.temperature,
               topK: s.topK,
-              maxTokens: Math.min(receivedCap(req.limits.maxOutputTokens), Math.max(16, s.quota - tokens)),
+              maxTokens: Math.min(receivedCap(req.limits.maxOutputTokens), s.backend.maxOutput?.() ?? Number.MAX_SAFE_INTEGER, Math.max(16, s.quota - tokens)),
               onReasoning: (text) => respond(rid, { kind: "reasoning", text }),
               tools: offered,
               ...(req.trace ? { onTrace: (t) => respond(rid, { kind: "trace", round, trace: sanitizeTrace(t) as typeof t }) } : {}),

@@ -1,6 +1,7 @@
 // OpenAI Chat Completions shape: OpenAI, xAI Grok, DeepSeek, OpenRouter, and any compatible
 // endpoint the user enters (Ollama, LM Studio, Mistral, Groq...).
 
+import { cappedOutputTokens } from "../../shared/cloud-models";
 import { LLMError } from "../../shared/errors";
 import { estimateMessageTokens, estimateTokens, type Usage } from "../../shared/protocol";
 import type { GenerateResult } from "../backend";
@@ -12,15 +13,16 @@ import { dataUrl, guard, post, type Adapter } from "./types";
 const OPENAI_REASONING = /^(?:o\d|gpt-(?:[5-9]|\d{2}))/;
 
 /**
- * OpenAI itself takes `max_completion_tokens` on every model and rejects `max_tokens` on newer
- * ones. Other compatible endpoints (Ollama, older servers) may only know `max_tokens`.
+ * Output-token field for this endpoint. OpenAI and xAI take `max_completion_tokens` and reject
+ * or ignore `max_tokens` on current models. DeepSeek, OpenRouter and older servers only know
+ * `max_tokens`. The value is an integer, never above that model's output cap.
  */
 export function openAIParams(providerId: string, model: string, temperature: number, maxTokens?: number): Record<string, number> {
-  if (providerId !== "openai") return { temperature, ...(maxTokens ? { max_tokens: maxTokens } : {}) };
-  return {
-    ...(OPENAI_REASONING.test(model) ? {} : { temperature }),
-    ...(maxTokens ? { max_completion_tokens: maxTokens } : {}),
-  };
+  const tokens = maxTokens ? cappedOutputTokens(providerId, model, maxTokens, maxTokens) : undefined;
+  const field = providerId === "openai" || providerId === "xai" ? "max_completion_tokens" : "max_tokens";
+  const limit = tokens ? { [field]: tokens } : {};
+  if (providerId === "openai" && OPENAI_REASONING.test(model)) return limit;
+  return { temperature, ...limit };
 }
 
 export const openAICompatAdapter: Adapter = (cfg, messages, opts, signal, fetchImpl = fetch) =>

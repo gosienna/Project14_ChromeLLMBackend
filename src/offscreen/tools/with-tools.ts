@@ -37,6 +37,14 @@ class PromptedTools implements Backend {
     return this.inner.contextWindow();
   }
 
+  maxInput() {
+    return this.inner.maxInput?.();
+  }
+
+  maxOutput() {
+    return this.inner.maxOutput?.();
+  }
+
   acceptsImages() {
     return this.inner.acceptsImages();
   }

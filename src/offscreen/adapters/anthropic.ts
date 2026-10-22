@@ -1,6 +1,7 @@
 // Anthropic Messages API. System prompt is a top-level field; browser-originated calls need
 // the anthropic-dangerous-direct-browser-access header.
 
+import { cappedOutputTokens } from "../../shared/cloud-models";
 import { LLMError } from "../../shared/errors";
 import { estimateMessageTokens, type ChatMessage, type ToolCall, type Usage } from "../../shared/protocol";
 import type { GenerateResult } from "../backend";
@@ -19,6 +20,15 @@ const TAKES_TEMPERATURE = /^claude-(?:3|(?:opus|sonnet|haiku)-4(?:-[0-6])?(?:-\d
 
 export function takesTemperature(model: string): boolean {
   return TAKES_TEMPERATURE.test(model);
+}
+
+/**
+ * Anthropic requires an integer `max_tokens` and rejects any value above that model's output cap
+ * (128000 for Claude 5, 64000 for the older listed models). A session may ask for the whole
+ * context still free, which is larger than the cap.
+ */
+export function anthropicMaxTokens(model: string, requested?: number): number {
+  return cappedOutputTokens("anthropic", model, requested, 4096);
 }
 
 /** Anthropic turns. Tool results of one round go together in a user turn of tool_result blocks. */
@@ -67,7 +77,7 @@ export const anthropicAdapter: Adapter = (cfg, messages, opts, signal, fetchImpl
       },
       {
         model: cfg.model,
-        max_tokens: opts.maxTokens ?? 4096,
+        max_tokens: anthropicMaxTokens(cfg.model, opts.maxTokens),
         stream: true,
         ...(takesTemperature(cfg.model) ? { temperature: Math.min(opts.temperature, 1) } : {}),
         ...(system ? { system } : {}),

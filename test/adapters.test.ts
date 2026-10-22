@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anthropicAdapter, takesTemperature } from "../src/offscreen/adapters/anthropic";
+import { anthropicAdapter, anthropicMaxTokens, takesTemperature } from "../src/offscreen/adapters/anthropic";
 import { geminiAdapter } from "../src/offscreen/adapters/gemini";
 import { openAICompatAdapter, openAIParams } from "../src/offscreen/adapters/openai-compat";
 import type { Adapter } from "../src/offscreen/adapters/types";
@@ -70,6 +70,26 @@ describe("anthropicAdapter", () => {
     await run(anthropicAdapter, "anthropic", f);
     expect(JSON.parse(calls[0].init.body as string)).not.toHaveProperty("temperature");
   });
+
+  it("caps max_tokens at the model's output limit", async () => {
+    expect(anthropicMaxTokens("claude-opus-5-5", 994_251)).toBe(128_000);
+    expect(anthropicMaxTokens("claude-sonnet-4-6", 994_251)).toBe(64_000);
+    expect(anthropicMaxTokens("claude-haiku-4-5", 100)).toBe(100);
+    expect(anthropicMaxTokens("claude-opus-5-5")).toBe(4096);
+    expect(anthropicMaxTokens("custom-model", 994_251)).toBe(994_251);
+
+    const { f, calls } = mockFetch(sse([{ type: "message_stop" }]));
+    const gen = anthropicAdapter(
+      { provider: provider("anthropic"), model: "claude-opus-5-5", apiKey: "KEY" },
+      [{ role: "user", content: "hi" }],
+      { temperature: 0.5, topK: 3, maxTokens: 994_251 },
+      new AbortController().signal,
+      f,
+    );
+    let step = await gen.next();
+    while (!step.done) step = await gen.next();
+    expect(JSON.parse(calls[0].init.body as string).max_tokens).toBe(128_000);
+  });
 });
 
 describe("openAICompatAdapter", () => {
@@ -95,13 +115,18 @@ describe("openAICompatAdapter", () => {
     await expect(run(openAICompatAdapter, "openai", f, ac.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
 
-  it("uses max_completion_tokens on OpenAI and drops temperature for its reasoning models", () => {
+  it("uses each provider's output-token field and caps it at the model limit", () => {
     expect(openAIParams("openai", "gpt-6-luna", 0.5, 100)).toEqual({ max_completion_tokens: 100 });
     expect(openAIParams("openai", "gpt-5.4-mini", 0.5, 100)).toEqual({ max_completion_tokens: 100 });
     expect(openAIParams("openai", "o4-mini", 0.5)).toEqual({});
     expect(openAIParams("openai", "gpt-4.1-mini", 0.5, 100)).toEqual({ temperature: 0.5, max_completion_tokens: 100 });
-    // Other compatible endpoints keep the classic fields.
-    expect(openAIParams("xai", "grok-4.3", 0.5, 100)).toEqual({ temperature: 0.5, max_tokens: 100 });
+    expect(openAIParams("openai", "gpt-4o-mini", 0.5, 100_000)).toEqual({ temperature: 0.5, max_completion_tokens: 16_384 });
+    // xAI deprecated max_tokens; its output default is 128K.
+    expect(openAIParams("xai", "grok-4.3", 0.5, 100)).toEqual({ temperature: 0.5, max_completion_tokens: 100 });
+    expect(openAIParams("xai", "grok-4.3", 0.5, 994_251)).toEqual({ temperature: 0.5, max_completion_tokens: 128_000 });
+    expect(openAIParams("deepseek", "deepseek-flash", 0.5, 994_251)).toEqual({ temperature: 0.5, max_tokens: 384_000 });
+    expect(openAIParams("openrouter", "google/gemini-3.8-flash", 0.5, 994_251)).toEqual({ temperature: 0.5, max_tokens: 65_536 });
+    // Endpoints outside the list keep the classic field and the requested value.
     expect(openAIParams("custom-ollama", "gpt-oss", 0.5, 100)).toEqual({ temperature: 0.5, max_tokens: 100 });
   });
 });
@@ -118,6 +143,20 @@ describe("geminiAdapter", () => {
     const body = JSON.parse(calls[0].init.body as string);
     expect(body.systemInstruction.parts[0].text).toBe("S");
     expect(body.contents).toEqual([{ role: "user", parts: [{ text: "hi" }] }]);
+  });
+
+  it("caps maxOutputTokens at 65536", async () => {
+    const { f, calls } = mockFetch(sse([]));
+    const gen = geminiAdapter(
+      { provider: provider("gemini"), model: "gemini-3.8-flash", apiKey: "KEY" },
+      [{ role: "user", content: "hi" }],
+      { temperature: 0.5, topK: 3, maxTokens: 994_251 },
+      new AbortController().signal,
+      f,
+    );
+    let step = await gen.next();
+    while (!step.done) step = await gen.next();
+    expect(JSON.parse(calls[0].init.body as string).generationConfig.maxOutputTokens).toBe(65_536);
   });
 });
 

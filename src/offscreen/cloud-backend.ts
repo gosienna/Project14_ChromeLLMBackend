@@ -41,6 +41,14 @@ export class CloudBackend implements Backend {
     return this.info?.contextWindow ?? UNLISTED_CONTEXT;
   }
 
+  maxInput() {
+    return this.info?.maxInput;
+  }
+
+  maxOutput() {
+    return this.info?.maxOutput;
+  }
+
   acceptsImages() {
     return this.info ? takesCloudImages(this.info) : true;
   }

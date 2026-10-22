@@ -72,7 +72,7 @@ function localModels({ settings, site, host }: ModelListInput): ModelInfo[] {
 }
 
 function cloudEntry(provider: ProviderDef, m: CloudModel, isDefault: boolean, settings: Settings): ModelInfo {
-  const inputQuota = Math.min(m.contextWindow, effectiveMaxContext(settings.limits));
+  const inputQuota = Math.min(m.maxInput ?? m.contextWindow, effectiveMaxContext(settings.limits));
   return {
     id: `${provider.id}:${m.id}`,
     name: m.name,

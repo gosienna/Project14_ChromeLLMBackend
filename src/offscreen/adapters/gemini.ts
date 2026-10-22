@@ -1,6 +1,7 @@
 // Google Gemini streamGenerateContent. Roles are "user" / "model"; system prompt goes in
 // systemInstruction.
 
+import { cappedOutputTokens } from "../../shared/cloud-models";
 import { LLMError } from "../../shared/errors";
 import { estimateMessageTokens, randomId, type ChatMessage, type ToolCall, type Usage } from "../../shared/protocol";
 import type { GenerateResult } from "../backend";
@@ -56,7 +57,8 @@ export const geminiAdapter: Adapter = (cfg, messages, opts, signal, fetchImpl = 
         generationConfig: {
           temperature: opts.temperature,
           topK: opts.topK,
-          ...(opts.maxTokens ? { maxOutputTokens: opts.maxTokens } : {}),
+          // A single streamGenerateContent call rejects maxOutputTokens above 65536.
+          ...(opts.maxTokens ? { maxOutputTokens: cappedOutputTokens("gemini", cfg.model, opts.maxTokens, opts.maxTokens) } : {}),
         },
       },
       signal,
