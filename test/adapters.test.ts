@@ -126,6 +126,7 @@ describe("openAICompatAdapter", () => {
     expect(openAIParams("xai", "grok-4.3", 0.5, 994_251)).toEqual({ temperature: 0.5, max_completion_tokens: 128_000 });
     expect(openAIParams("deepseek", "deepseek-flash", 0.5, 994_251)).toEqual({ temperature: 0.5, max_tokens: 384_000 });
     expect(openAIParams("openrouter", "google/gemini-3.8-flash", 0.5, 994_251)).toEqual({ temperature: 0.5, max_tokens: 65_536 });
+    expect(openAIParams("openrouter", "openrouter/auto", 0.5, 1_999_986)).toEqual({ temperature: 0.5, max_tokens: 65_536 });
     // Endpoints outside the list keep the classic field and the requested value.
     expect(openAIParams("custom-ollama", "gpt-oss", 0.5, 100)).toEqual({ temperature: 0.5, max_tokens: 100 });
   });

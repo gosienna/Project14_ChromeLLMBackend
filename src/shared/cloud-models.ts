@@ -123,8 +123,8 @@ export const CLOUD_MODELS: Record<string, CloudModel[]> = {
       price: { input: 1.32, output: 3.96, cachedInput: 0.044, note: "half price off-peak (outside 09–12, 14–18 Beijing time on weekdays)" } },
   ],
   openrouter: [
-    // The routed model may have a 1M window, so an uncapped max_tokens (≈2M) is rejected.
-    { id: "openrouter/auto", name: "Auto Router", input: ["text", "image", "audio", "video", "pdf"], contextWindow: 2_000_000, maxOutput: 65_536, tools: "native" },
+    // Auto's own endpoint rejects input + max_tokens above 1,050,000 (a 2M window was sent as ~2M output).
+    { id: "openrouter/auto", name: "Auto Router", input: ["text", "image", "audio", "video", "pdf"], contextWindow: 1_050_000, maxOutput: 65_536, tools: "native" },
     { id: "anthropic/claude-sonnet-5.5", name: "Claude Sonnet 5.5", input: CLAUDE, contextWindow: 1_000_000, maxOutput: 128_000, reasoning: "hybrid", tools: "native",
       price: { input: 2, output: 10 } },
     { id: "openai/gpt-6.1-sol", name: "GPT-6.1 Sol", input: ["text", "image", "pdf"], contextWindow: 1_050_000, maxInput: 922_000, maxOutput: 128_000, reasoning: "always", tools: "native",

@@ -60,6 +60,8 @@ describe("CloudBackend capabilities", () => {
     expect(backend("anthropic", "claude-opus-5-5").maxInput()).toBeUndefined();
     expect(backend("xai", "grok-4.3").maxOutput()).toBe(128_000);
     expect(backend("gemini", "gemini-3.8-flash").maxOutput()).toBe(65_536);
+    expect(backend("openrouter", "openrouter/auto").contextWindow()).toBe(1_050_000);
+    expect(backend("openrouter", "openrouter/auto").maxOutput()).toBe(65_536);
     expect(sol.toolMode()).toBe("prompted");
     expect(backend("openai", "gpt-5.6-terra").toolMode()).toBe("native");
     expect(backend("deepseek", "deepseek-v4-pro").acceptsImages()).toBe(false);
