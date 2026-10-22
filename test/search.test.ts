@@ -1,19 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { runSearch, type SearchDeps } from "../src/background/search";
-import { googleSearchUrl, normalizeGoogleResults, tavilyFallback } from "../src/shared/search";
+import { googleImagesUrl, googleSearchUrl, normalizeGoogleImages, normalizeGoogleResults, tavilyFallback } from "../src/shared/search";
 
 const hit = { title: "T", url: "https://example.com/", snippet: "s", score: 0.9 };
 
-function deps(over: Partial<SearchDeps> = {}): SearchDeps & { googleCalls: number } {
+const pic = { url: "https://img.example/cat.jpg", description: "A cat" };
+
+function deps(over: Partial<SearchDeps> = {}): SearchDeps & { googleCalls: number; flags: boolean[] } {
   const d = {
     googleCalls: 0,
+    flags: [] as boolean[],
     tavilyKey: async () => "tvly-key",
     tavilyPermitted: async () => true,
-    tavily: async (_k: string, query: string) => ({ ok: true as const, query, results: [hit] }),
+    tavily: async (_k: string, query: string, _n: number, images: boolean) => {
+      d.flags.push(images);
+      return { ok: true as const, query, results: [hit], ...(images ? { images: [pic] } : {}) };
+    },
     googlePermitted: async () => true,
-    google: async () => {
+    google: async (_q: string, _n: number, images: boolean) => {
       d.googleCalls++;
-      return [{ ...hit, url: "https://g.example/", score: null }];
+      d.flags.push(images);
+      return { results: [{ ...hit, url: "https://g.example/", score: null }], ...(images ? { images: [pic] } : {}) };
     },
     ...over,
   };
@@ -50,6 +57,70 @@ describe("runSearch", () => {
     await expect(runSearch("q", 5, deps({ tavilyKey: async () => null, googlePermitted: async () => false }))).rejects.toMatchObject({ name: "NotAllowedError" });
     await expect(runSearch("q", 5, deps({ tavily: async () => ({ ok: false, status: 400, message: "Tavily: bad" }) }))).rejects.toMatchObject({ name: "DataError" });
     await expect(runSearch("  ", 5, deps())).rejects.toMatchObject({ name: "DataError" });
+  });
+});
+
+describe("runSearch with images", () => {
+  it("asks Tavily for images only when requested", async () => {
+    const d = deps();
+    expect(await runSearch("cats", 5, d, { includeImages: true })).toEqual({ query: "cats", provider: "tavily", results: [hit], images: [pic] });
+    expect((await runSearch("cats", 5, d)).images).toBeUndefined();
+    expect(d.flags).toEqual([true, false]);
+  });
+
+  it("gets images from Google on fallback, and keeps the results when the Images tab fails", async () => {
+    const noKey = { tavilyKey: async () => null };
+    const g = deps(noKey);
+    expect(await runSearch("cats", 5, g, { includeImages: true })).toMatchObject({ provider: "google", images: [pic], note: "No Tavily API key; results from Google" });
+    expect(g.flags).toEqual([true]);
+    const failed = await runSearch("cats", 5, deps({ ...noKey, google: async () => ({ results: [hit], images: null }) }), { includeImages: true });
+    expect(failed).toEqual({
+      query: "cats",
+      provider: "google",
+      results: [hit],
+      images: [],
+      note: "No Tavily API key; results from Google; Google image results unavailable",
+    });
+  });
+});
+
+describe("normalizeGoogleImages", () => {
+  const thumb = "https://encrypted-tbn0.gstatic.com/images?q=tbn:abc";
+  it("pairs inline originals with their thumbnails, decodes escapes, dedupes, caps", () => {
+    const out = normalizeGoogleImages(
+      {
+        blocked: false,
+        data: [
+          { url: thumb, h: 100, w: 150 },
+          { url: "https://img.example/a.jpg?w\u003d800\u0026h\u003d600", h: 600, w: 800 },
+          { url: "https://www.google.com/logos/x.png", h: 1, w: 1 },
+          { url: "https://img.example/b.png", h: 10, w: 20 },
+          { url: "https://img.example/b.png", h: 10, w: 20 },
+          { url: "https://img.example/c.png", h: 1, w: 1 },
+        ],
+        links: [],
+        thumbs: [{ src: thumb, alt: " Cat  on a mat " }],
+      },
+      2,
+    );
+    expect(out).toEqual([
+      { url: "https://img.example/a.jpg?w=800&h=600", description: "Cat on a mat", thumbnail: thumb, width: 800, height: 600 },
+      { url: "https://img.example/b.png", width: 20, height: 10 },
+    ]);
+  });
+
+  it("reads /imgres links, and falls back to thumbnails", () => {
+    const imgres = "https://www.google.com/imgres?imgurl=https%3A%2F%2Fimg.example%2Fd.jpg&imgrefurl=https%3A%2F%2Fsite.example%2Fpage";
+    expect(normalizeGoogleImages({ blocked: false, data: [], links: [imgres, "https://www.google.com/imgres?imgurl=javascript:x"], thumbs: [] }, 5)).toEqual([
+      { url: "https://img.example/d.jpg", sourceUrl: "https://site.example/page" },
+    ]);
+    expect(normalizeGoogleImages({ blocked: false, data: [], links: [], thumbs: [{ src: thumb, alt: "Cat" }] }, 5)).toEqual([
+      { url: thumb, description: "Cat", thumbnail: thumb },
+    ]);
+  });
+
+  it("builds the images url", () => {
+    expect(googleImagesUrl("a b")).toBe("https://www.google.com/search?q=a+b&udm=2&hl=en");
   });
 });
 

@@ -15,6 +15,7 @@ import {
   type DistributiveOmit,
   type ImageInput,
   type ImageMime,
+  type ModelInfo,
   type PageRequest,
   type PageResponse,
   type PlaygroundEnvelope,
@@ -24,11 +25,12 @@ import {
 import { allProviders, getSettings } from "../shared/settings";
 import { h, send as uiSend } from "./dom";
 import { renderMarkdown } from "./markdown";
+import { hydrateImages, revokeImages } from "./remote-image";
 import type { Payload } from "./playground/payload";
 import { PendingRaw, replyRaw, type TraceEntry } from "./playground/raw";
 import { ToolsPanel } from "./playground/tools-panel";
 import { declarations, listTools, registryEvents, seedBuiltins, type ToolRecord } from "./tools/registry";
-import { runTool } from "./tools/run";
+import { runToolWithValue } from "./tools/run";
 
 const app = document.getElementById("app")!;
 
@@ -154,8 +156,10 @@ const markdownToggle = h("input", { type: "checkbox", checked: renderMd, onchang
 function showAnswer(el: HTMLElement, text: string) {
   el.dataset.md = text;
   el.classList.toggle("pg-md", renderMd);
-  if (renderMd) el.innerHTML = renderMarkdown(text);
-  else el.textContent = text;
+  if (renderMd) {
+    el.innerHTML = renderMarkdown(text);
+    hydrateImages(el);
+  } else el.textContent = text;
 }
 
 const tempInput = h("input", { type: "number", min: 0, max: 2, step: 0.1, placeholder: "default", "aria-label": "Temperature", onchange: () => newChat() });
@@ -184,8 +188,14 @@ function flash(text: string) {
 
 async function loadBackends() {
   const settings = await getSettings();
-  const model = findModel(settings.local.modelId);
-  const options: Array<[string, string]> = [["local", `Local · ${model?.name ?? settings.local.modelId}`]];
+  // Every downloaded local model ("local:<catalog id>"); the configured one is first.
+  const local = await request<ModelInfo[]>({ kind: "models" }).promise.catch(() => [] as ModelInfo[]);
+  const options: Array<[string, string]> = local.map((m) => [m.id, `Local · ${m.name}`]);
+  if (!local.some((m) => m.id === `local:${settings.local.modelId}`)) {
+    // Not downloaded yet: "local" runs the configured model, which downloads on first message.
+    const model = findModel(settings.local.modelId);
+    options.unshift(["local", `Local · ${model?.name ?? settings.local.modelId}`]);
+  }
   for (const p of allProviders(settings)) {
     const cfg = settings.providers[p.id];
     const id = cfg?.model || p.defaultModel;
@@ -197,7 +207,7 @@ async function loadBackends() {
   } catch {
     /* storage unavailable */
   }
-  backendId = options.some(([id]) => id === saved) ? saved! : "local";
+  backendId = options.some(([id]) => id === saved) ? saved! : options[0][0];
   backendSel.replaceChildren(...options.map(([id, label]) => h("option", { value: id, selected: id === backendId }, label)));
 }
 
@@ -237,6 +247,7 @@ function newChat() {
   dropSession();
   for (const u of urls) URL.revokeObjectURL(u);
   urls = [];
+  revokeImages();
   transcript = [];
   log.replaceChildren(empty);
   usage.textContent = "";
@@ -319,8 +330,24 @@ function notice(text: string) {
 // ---- Tools --------------------------------------------------------------------
 
 /** Tool results sent back to the model are capped (Project05's limits): local models have small contexts. */
-const resultLimit = () => (backendId === "local" ? 3000 : 8000);
+const resultLimit = () => (backendId === "local" || backendId.startsWith("local:") ? 3000 : 8000);
 const capResult = (text: string) => (text.length > resultLimit() ? `${text.slice(0, resultLimit())}\n...[truncated, ${text.length} chars total]` : text);
+
+/** Thumbnails for a result with an images list (web_search with include_images); null otherwise. */
+function imageGrid(value: unknown): HTMLElement | null {
+  const images = (value as { images?: unknown } | null)?.images;
+  if (!Array.isArray(images)) return null;
+  const tiles = images.flatMap((img: { url?: unknown; sourceUrl?: unknown; description?: unknown }) => {
+    if (typeof img?.url !== "string" || !/^https?:/i.test(img.url)) return [];
+    const href = typeof img.sourceUrl === "string" && /^https?:/i.test(img.sourceUrl) ? img.sourceUrl : img.url;
+    const alt = typeof img.description === "string" ? img.description : "";
+    return [h("a", { href, target: "_blank", rel: "noopener noreferrer", title: alt || img.url }, h("img", { class: "pg-tool-img", "data-src": img.url, alt }))];
+  });
+  if (!tiles.length) return null;
+  const grid = h("div", { class: "pg-tool-images" }, ...tiles);
+  hydrateImages(grid);
+  return grid;
+}
 
 /** A tool call shown in the reply: arguments, then the result; asks first when the tool requires it. */
 function toolCard(name: string, args: Record<string, unknown>) {
@@ -349,12 +376,15 @@ function toolCard(name: string, args: Record<string, unknown>) {
         actions.hidden = false;
       });
     },
-    done(text: string, isError: boolean) {
+    done(text: string, isError: boolean, value?: unknown) {
       status.textContent = isError ? "failed" : "done";
       result.textContent = text;
       result.hidden = false;
       result.classList.toggle("warn-text", isError);
-      el.open = false;
+      const grid = isError ? null : imageGrid(value);
+      if (grid) result.before(grid);
+      // Stay open when there are pictures to look at.
+      el.open = !!grid;
     },
   };
 }
@@ -368,14 +398,17 @@ async function handleToolCall(target: string, call: Extract<PageResponse, { kind
   const card = toolCard(call.name, call.arguments);
   before.before(card.el);
   let text: string;
+  let value: unknown;
   let isError = false;
   try {
-    text = capResult(await runTool(call.name, call.arguments, { confirm: (rec) => card.ask(rec), webSearch }));
+    const out = await runToolWithValue(call.name, call.arguments, { confirm: (rec) => card.ask(rec), webSearch });
+    text = capResult(out.text);
+    value = out.value;
   } catch (e) {
     isError = true;
     text = (e as Error).message;
   }
-  card.done(text, isError);
+  card.done(text, isError, value);
   if (pending.has(target)) send({ kind: "tool-result", target, callId: call.callId, result: text, isError });
 }
 

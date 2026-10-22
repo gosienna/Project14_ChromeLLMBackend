@@ -372,11 +372,24 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
 
   Object.defineProperty(window, "LanguageModel", { value: LanguageModel, writable: true, configurable: true });
 
-  function search(query: string, options: { maxResults?: number; signal?: AbortSignal } = {}): Promise<SearchResponse> {
+  function search(query: string, options: { maxResults?: number; includeImages?: boolean; signal?: AbortSignal } = {}): Promise<SearchResponse> {
     if (typeof query !== "string" || !query.trim()) return Promise.reject(new TypeError("search() needs a non-empty query"));
     const n = Math.floor(Number(options.maxResults ?? 5));
     const maxResults = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Number.isFinite(n) ? n : 5));
-    return request<SearchResponse>({ kind: "search", query: query.slice(0, 500), maxResults }, {}, options.signal);
+    return request<SearchResponse>({ kind: "search", query: query.slice(0, 500), maxResults, includeImages: options.includeImages === true }, {}, options.signal);
+  }
+
+  /**
+   * Download an image a search on this page returned (search with includeImages), e.g. to keep a
+   * copy. Same site switch as search; other urls are refused.
+   */
+  async function fetchImage(url: string, options: { signal?: AbortSignal } = {}): Promise<{ url: string; type: string; blob: Blob }> {
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) throw new TypeError("fetchImage() needs an http(s) url");
+    const r = await request<{ url: string; type: string; data: string }>({ kind: "fetch-image", url }, {}, options.signal);
+    const bin = atob(r.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return { url: r.url, type: r.type, blob: new Blob([bytes], { type: r.type }) };
   }
 
   /**
@@ -386,18 +399,20 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
   function webSearchTool(options: { name?: string; maxResults?: number } = {}): ToolOption {
     return {
       name: options.name ?? "web_search",
-      description: "Search the web. Returns a JSON list of results with title, url and snippet. Use it for current events or facts you are unsure of, and cite the urls you use.",
+      description:
+        "Search the web. Returns a JSON list of results with title, url and snippet, plus image urls when include_images is set. Use it for current events or facts you are unsure of, and cite the urls you use.",
       inputSchema: {
         type: "object",
         properties: {
           query: { type: "string", description: "The search query" },
           max_results: { type: "integer", minimum: 1, maximum: MAX_SEARCH_RESULTS, description: "How many results (default 5)" },
+          include_images: { type: "boolean", description: "Also return image urls for the query" },
         },
         required: ["query"],
       },
       execute: async (args) => {
         const max = Number(args.max_results) || options.maxResults || 5;
-        return JSON.stringify(await search(String(args.query ?? ""), { maxResults: max }));
+        return JSON.stringify(await search(String(args.query ?? ""), { maxResults: max, includeImages: args.include_images === true }));
       },
     };
   }
@@ -409,9 +424,10 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
     /** Models this site can run now; pass an id to LanguageModel.create({ model }). */
     models: () => request<ModelInfo[]>({ kind: "models" }),
     /** Features this extension version offers pages. */
-    capabilities: Object.freeze({ search: true }),
+    capabilities: Object.freeze({ search: true, imageSearch: true, fetchImage: true }),
     /** Web search, if the user turned it on for this site: Tavily, or a Google results page as fallback. */
     search,
+    fetchImage,
     webSearchTool,
   });
   Object.defineProperty(window, "localLLM", { value: localLLM, writable: false, configurable: true });

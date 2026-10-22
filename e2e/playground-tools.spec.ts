@@ -103,3 +103,20 @@ test("browser tools read the most recently used web page", async ({ context, sw 
   await say(page, "/tool list_tabs {}");
   await expect(page.locator(".pg-assistant > .pg-text").last()).toContainText("e2e page");
 });
+
+test("web_search results with images show a thumbnail grid", async ({ context, sw }) => {
+  const results = [{ title: "Pixel", url: "http://localhost:8790/index.html", snippet: "A pixel", score: null }];
+  const images = [
+    { url: "http://localhost:8790/pixel.png", description: "One pixel", sourceUrl: "http://localhost:8790/index.html" },
+    { url: "http://localhost:8790/pixel.png?2", description: "Another" },
+  ];
+  await sw.evaluate(([r, i]) => (globalThis as any).__test.setSearchStub(r, i), [results, images] as const);
+  const page = await openPlayground(context, new URL(sw.url()).host);
+  await enableTools(page, ["web_search"]);
+  await say(page, '/tool web_search {"query":"pixel","include_images":true}');
+  const card = page.locator(".pg-toolcall").last();
+  await expect(card.locator(".pg-tool-images img")).toHaveCount(2);
+  await expect(card.locator(".pg-tool-images img").first()).toHaveAttribute("src", /^blob:/);
+  await expect(card.locator(".pg-tool-images a").first()).toHaveAttribute("href", "http://localhost:8790/index.html");
+  await expect(page.locator(".pg-assistant > .pg-text").last()).toContainText("pixel.png");
+});

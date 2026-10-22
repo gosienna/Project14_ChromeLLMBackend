@@ -48,7 +48,7 @@ export type AdminOp =
   /** Abort every in-flight request, or only one origin's. Resolves to the number aborted. */
   | { op: "stop"; origin?: string }
   /** Web search through Tavily; resolves to a TavilyOutcome. The router adds the key; the page never sees it. */
-  | { op: "webSearch"; apiKey: string; query: string; maxResults: number };
+  | { op: "webSearch"; apiKey: string; query: string; maxResults: number; includeImages: boolean };
 
 export interface HostStatus {
   caps: DeviceCaps;

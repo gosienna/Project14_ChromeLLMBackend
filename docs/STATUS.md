@@ -90,6 +90,13 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - First user: LearnWithLLM's web search toggle
 - Tests: protocol, gate, `runSearch` provider choice, `tavilyFallback`, `normalizeGoogleResults`, web package; E2E with `__test.setSearchStub`. Not yet verified: real Google results page markup, real Tavily quota responses
 
+## Image results for web search — done (stubbed provider)
+
+- `includeImages` on `localLLM.search()` / `include_images` on every `web_search` tool (playground, `webSearchTool()`, `@local-llm/web`, LearnWithLLM). Response gets `images: [{ url, description?, sourceUrl?, thumbnail?, width?, height? }]`, capped at `maxResults`; absent unless asked
+- Tavily: `include_images` + `include_image_descriptions` on the same request. Google fallback: after the web results, the same minimized tab loads the Images tab (`udm=2`); `collectGoogleImages` gathers `["url",h,w]` triples from inline script data, `/imgres` links and thumbnails; `normalizeGoogleImages` decodes, drops gstatic/google hosts as originals, pairs thumbnails, dedupes. If the Images tab fails, web results still return with `images: []` and a note
+- `capabilities.imageSearch`; the `search` page request now requires `includeImages: boolean`
+- Tests: `runSearch` image flag and Images-tab failure, `normalizeGoogleImages`, protocol, web package; E2E with images in the stub. Not yet verified: real Google Images markup, real Tavily image responses
+
 ## Not started / v2
 
 - Structured output (`responseConstraint`), embeddings
@@ -100,3 +107,10 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 ## Open questions from the plan
 
 Still open: richer `window.localLLM` in v1, default model and ~1 GB first download, which providers ship enabled, new extension vs. mode of the existing agent extension. Current defaults: standard namespace plus `localLLM.info()`, Qwen2.5 0.5B default, all providers off until the user enables them, standalone extension.
+
+## Images in the playground, and localLLM.fetchImage — done
+
+- Playground: Markdown `![alt](url)` renders as `<img data-src>`; `ui/remote-image.ts` fetches the image (extension pages run with COEP `require-corp`, so plain remote `<img>` fails) and shows a `blob:` URL, cached per url and revoked on New chat. Failures become a link with an "Allow images" button (`<all_urls>`). Tool results with an `images` list (web_search with `include_images`) show a thumbnail grid (`runToolWithValue` keeps the value)
+- Page API: `fetch-image` request / `localLLM.fetchImage(url)` → `{ url, type, blob }`. Same gate as search; only urls that origin's searches returned (`SearchedImages`, 300 per origin, cleared on revoke and lost on worker restart); raster types, 8 MB; 30/min per origin. Options → Tools "Images for sites" grants `<all_urls>`. `@local-llm/web`: `found.fetchImage`
+- First user: LearnWithLLM stores fetched images on the topic (`whiteboard_add_image`)
+- Tests: Markdown image markup, `checkImageResponse`, `SearchedImages`, protocol, gate; E2E Markdown image via blob URL and failed-image link, tool-card grid, `fetchImage` allowlist. Not yet verified: real image hosts with and without `<all_urls>`

@@ -20,6 +20,11 @@ const SANDBOX_TIMEOUT_MS = 30_000;
 
 /** Run a tool and return its result as text for the model. Throws if it can't or mustn't run. */
 export async function runTool(name: string, args: Args, opts: RunOptions, depth = 0): Promise<string> {
+  return (await runToolWithValue(name, args, opts, depth)).text;
+}
+
+/** runTool, also returning the tool's value before it became text (the playground shows images from it). */
+export async function runToolWithValue(name: string, args: Args, opts: RunOptions, depth = 0): Promise<{ text: string; value: unknown }> {
   if (depth > MAX_DEPTH) throw new Error("Too many nested tool calls");
   const rec = await getTool(name);
   if (!rec?.enabled) throw new Error(`Tool "${name}" is not enabled`);
@@ -33,7 +38,7 @@ export async function runTool(name: string, args: Args, opts: RunOptions, depth 
   } else {
     value = await runInSandbox(rec.code ?? "", args, (n, a) => runTool(n, a, opts, depth + 1));
   }
-  return typeof value === "string" ? value : (JSON.stringify(value) ?? "null");
+  return { text: typeof value === "string" ? value : (JSON.stringify(value) ?? "null"), value };
 }
 
 // ---- Sandbox ------------------------------------------------------------------

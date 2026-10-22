@@ -157,9 +157,13 @@ function renderTable(rows: string[], inline: (t: string) => string): string {
 
 function renderInline(text: string, park: (html: string) => string): string {
   let s = text;
-  // Links are validated before escaping. Images become links: no remote loads from model output.
-  s = s.replace(/!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (full, label: string, url: string) =>
-    isSafeUrl(url) ? park(link(url, escapeHtml(label || url))) : full);
+  // Links are validated before escaping. Images carry their url in data-src only: the playground
+  // fetches them itself (ui/remote-image.ts), so rendering never triggers a remote load.
+  s = s.replace(/(!?)\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (full, bang: string, label: string, url: string) => {
+    if (!isSafeUrl(url)) return full;
+    if (bang && /^https?:/i.test(url.trim())) return park(`<img class="pg-md-img" data-src="${escapeHtml(url.trim())}" alt="${escapeHtml(label)}" loading="lazy">`);
+    return park(link(url, escapeHtml(label || url)));
+  });
   s = escapeHtml(s);
   // Bare URLs, trailing punctuation left outside the link.
   s = s.replace(/(^|[\s(])(https?:\/\/[^\s<]+?)([.,;:!?)]*(?=\s|$))/g, (_, pre: string, url: string, tail: string) => {

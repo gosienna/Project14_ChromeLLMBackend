@@ -123,3 +123,18 @@ test("replies render Markdown and LaTeX, with a plain-text option", async ({ con
   await expect(answer).toContainText("# Title");
   await expect(answer).toContainText("$$\\frac{a}{b}$$");
 });
+
+test("Markdown images load through the playground, not as remote <img> loads", async ({ context, sw }) => {
+  const extId = new URL(sw.url()).host;
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extId}/ui/playground.html`);
+  await expect(page.locator(".pg-head")).toContainText("on dummy");
+  await page.getByLabel("Message", { exact: true }).fill("look ![pixel](http://localhost:8790/pixel.png) and ![gone](http://localhost:8790/missing.png)");
+  await page.getByRole("button", { name: "Send" }).click();
+  const answer = page.locator(".pg-assistant > .pg-text").last();
+  await expect(answer.locator("img.pg-md-img")).toHaveAttribute("src", /^blob:/);
+  await expect(answer.locator("img.pg-md-img")).toHaveAttribute("alt", "pixel");
+  expect(await answer.locator("img.pg-md-img").evaluate((img: HTMLImageElement) => img.decode().then(() => img.naturalWidth))).toBe(1);
+  // A missing image becomes a link.
+  await expect(answer.locator(".pg-img-failed a")).toHaveAttribute("href", "http://localhost:8790/missing.png");
+});

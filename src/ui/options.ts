@@ -408,6 +408,8 @@ async function toolsSection(): Promise<HTMLElement> {
   const msg = h("span", { class: "small muted" });
   const googleGranted = await chrome.permissions.contains({ origins: [GOOGLE] });
   const googleMsg = h("span", { class: "small muted" }, googleGranted ? "Granted" : "");
+  const imagesGranted = await chrome.permissions.contains({ origins: ["<all_urls>"] });
+  const imagesMsg = h("span", { class: "small muted" }, imagesGranted ? "Granted" : "");
   return section("tools", "Playground tools",
     h("p", { class: "small muted" },
       "The playground can give models the extension's own tools: browser automation, web search, and tools you write. Turn them on in the playground's Tools panel. ",
@@ -440,6 +442,18 @@ async function toolsSection(): Promise<HTMLElement> {
             render();
           } }, "Grant access to google.com"),
       googleMsg),
+    h("h2", { style: "margin-top:12px" }, "Images for sites"),
+    h("p", { class: "small muted" },
+      "Sites with web search on can download the images their searches found (localLLM.fetchImage), e.g. to keep them in a saved lesson. ",
+      "Without access to all sites, only image hosts that allow cross-site downloads work. The same access lets the playground show images."),
+    h("div", { class: "row" },
+      imagesGranted
+        ? null
+        : h("button", { onclick: async () => {
+            if (!(await chrome.permissions.request({ origins: ["<all_urls>"] }))) return toast(imagesMsg, "Not granted");
+            render();
+          } }, "Grant access to all sites"),
+      imagesMsg),
   );
 }
 

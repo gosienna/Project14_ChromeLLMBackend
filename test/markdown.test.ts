@@ -23,7 +23,10 @@ describe("renderMarkdown", () => {
     expect(md("[site](https://example.com/a?x=1&y=2)")).toBe('<p><a href="https://example.com/a?x=1&amp;y=2" target="_blank" rel="noopener noreferrer">site</a></p>');
     expect(md("see https://example.com/path.")).toBe('<p>see <a href="https://example.com/path" target="_blank" rel="noopener noreferrer">https://example.com/path</a>.</p>');
     expect(md("[x](javascript:alert(1))")).not.toContain("<a");
-    expect(md("![pic](https://evil.example/t.png)")).not.toContain("<img");
+    // Images carry the url in data-src only; the playground fetches them itself.
+    expect(md("![a \"pic\"](https://img.example/t.png)")).toBe('<p><img class="pg-md-img" data-src="https://img.example/t.png" alt="a &quot;pic&quot;" loading="lazy"></p>');
+    expect(md("![x](javascript:alert(1))")).not.toContain("<img");
+    expect(md("![x](mailto:a@b.example)")).not.toContain("<img");
   });
 
   it("escapes raw HTML", () => {

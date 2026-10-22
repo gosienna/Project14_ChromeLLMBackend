@@ -54,7 +54,7 @@ describe("parsePageRequest", () => {
 });
 
 describe("search request", () => {
-  const ok = { kind: "search", id: "r1", query: "weather", maxResults: 5 };
+  const ok = { kind: "search", id: "r1", query: "weather", maxResults: 5, includeImages: false };
   it("accepts a query and result count", () => expect(parsePageRequest(ok)).toEqual(ok));
   it("rejects empty, long or extra input", () => {
     expect(parsePageRequest({ ...ok, query: "  " })).toBeNull();
@@ -64,6 +64,21 @@ describe("search request", () => {
     expect(parsePageRequest({ ...ok, maxResults: 2.5 })).toBeNull();
     expect(parsePageRequest({ ...ok, provider: "google" })).toBeNull();
     expect(parsePageRequest({ kind: "search", id: "r1", query: "q" })).toBeNull();
+    expect(parsePageRequest({ kind: "search", id: "r1", query: "q", maxResults: 5 })).toBeNull();
+    expect(parsePageRequest({ ...ok, includeImages: "yes" })).toBeNull();
+  });
+});
+
+describe("fetch-image request", () => {
+  const ok = { kind: "fetch-image", id: "r1", url: "https://img.example/a.jpg" };
+  it("accepts an http(s) url", () => expect(parsePageRequest(ok)).toEqual(ok));
+  it("rejects other schemes, long urls and extra fields", () => {
+    expect(parsePageRequest({ ...ok, url: "file:///etc/passwd" })).toBeNull();
+    expect(parsePageRequest({ ...ok, url: "data:image/png;base64,AA" })).toBeNull();
+    expect(parsePageRequest({ ...ok, url: `https://a.example/${"x".repeat(2048)}` })).toBeNull();
+    expect(parsePageRequest({ ...ok, url: "https://a.example/a b" })).toBeNull();
+    expect(parsePageRequest({ ...ok, origin: "https://evil.example" })).toBeNull();
+    expect(parsePageRequest({ kind: "fetch-image", id: "r1" })).toBeNull();
   });
 });
 

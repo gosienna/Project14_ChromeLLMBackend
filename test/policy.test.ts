@@ -50,6 +50,14 @@ describe("gate: search", () => {
   });
 });
 
+describe("gate: fetch-image", () => {
+  it("rides on the web search switch and model consent", () => {
+    expect(gate({ ...base, kind: "fetch-image", site: site("always") }).action).toBe("deny");
+    expect(gate({ ...base, kind: "fetch-image", site: { ...site("always"), webSearch: true } }).action).toBe("allow");
+    expect(gate({ ...base, kind: "fetch-image", site: { ...site("deny"), webSearch: true } }).action).toBe("deny");
+  });
+});
+
 describe("consentAvailability", () => {
   it("reports consent state before asking the backend", () => {
     expect(consentAvailability(site(), true, false)).toBe("downloadable");

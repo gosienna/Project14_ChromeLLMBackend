@@ -141,7 +141,9 @@ export type PageRequest =
   /** The page ran a tool the model called during prompt `target`. */
   | { kind: "tool-result"; id: string; target: string; callId: string; result: string; isError: boolean }
   /** Web search (Tavily, falling back to a Google results tab). Only for sites with web search on. */
-  | { kind: "search"; id: string; query: string; maxResults: number };
+  | { kind: "search"; id: string; query: string; maxResults: number; includeImages: boolean }
+  /** Download an image this origin's own search returned. Same switch as search. */
+  | { kind: "fetch-image"; id: string; url: string };
 
 export type PageRequestKind = PageRequest["kind"];
 
@@ -196,6 +198,7 @@ const MAX_TOOL_SCHEMA = 65_536;
 const MAX_MODEL_ID = 256;
 export const MAX_SEARCH_QUERY = 500;
 export const MAX_SEARCH_RESULTS = 10;
+export const MAX_URL = 2048;
 export const TOOL_NAME = /^[A-Za-z_][\w-]{0,63}$/;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -277,7 +280,8 @@ const FIELDS: Record<PageRequestKind, string[]> = {
   destroy: ["sessionId"],
   abort: ["target"],
   "tool-result": ["target", "callId", "result", "isError"],
-  search: ["query", "maxResults"],
+  search: ["query", "maxResults", "includeImages"],
+  "fetch-image": ["url"],
 };
 
 /**
@@ -317,9 +321,12 @@ export function parsePageRequest(v: unknown, { images = false }: { images?: bool
         : null;
     case "search":
       return typeof v.query === "string" && v.query.trim().length > 0 && v.query.length <= MAX_SEARCH_QUERY &&
-        Number.isInteger(v.maxResults) && (v.maxResults as number) >= 1 && (v.maxResults as number) <= MAX_SEARCH_RESULTS
+        Number.isInteger(v.maxResults) && (v.maxResults as number) >= 1 && (v.maxResults as number) <= MAX_SEARCH_RESULTS &&
+        typeof v.includeImages === "boolean"
         ? (v as PageRequest)
         : null;
+    case "fetch-image":
+      return typeof v.url === "string" && v.url.length <= MAX_URL && /^https?:\/\/[^\s]+$/i.test(v.url) ? (v as PageRequest) : null;
   }
 }
 

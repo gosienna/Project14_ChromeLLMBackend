@@ -36,7 +36,9 @@ import {
 } from "../shared/settings";
 import { googlePermitted, googleSearch } from "./google-search";
 import { runSearch, type SearchDeps } from "./search";
-import type { SearchResult, TavilyOutcome } from "../shared/search";
+import { fetchImageForPage } from "./fetch-image";
+import { SearchedImages } from "../shared/remote-image";
+import type { ImageResult, SearchResult, TavilyOutcome } from "../shared/search";
 import { askConsent, clearOnceGrants, getConsentRequest, hasOnceGrant, onWindowClosed, settle, type Decision } from "./consent";
 import { hostReady, onHostDisconnect, onHostMessage, sendToHost } from "./host-link";
 import { TokenRateLimiter, exceedsDailyTokenCap, idleCloseIn, providerTokensThisMonth, siteTokensToday } from "./limits";
@@ -85,6 +87,11 @@ const limiter = new TokenRateLimiter();
 /** Searches per origin per minute; each one opens a Google window or spends a Tavily credit. */
 const SEARCHES_PER_MINUTE = 10;
 const searchLimiter = new TokenRateLimiter();
+/** Image downloads per origin per minute. */
+const IMAGE_FETCHES_PER_MINUTE = 30;
+const imageLimiter = new TokenRateLimiter();
+/** Image urls each origin's searches returned; the only ones fetch-image will download. */
+const searchedImages = new SearchedImages();
 let connCounter = 0;
 // Unique across worker restarts, since the host outlives the worker.
 const bootId = Date.now().toString(36);
@@ -138,7 +145,7 @@ function watchIdle(conn: PageConn, wait = idleCloseMs) {
 
 const PLAYGROUND_URL = chrome.runtime.getURL("ui/playground.html");
 const PLAYGROUND_ORIGIN = new URL(PLAYGROUND_URL).origin;
-const PLAYGROUND_KINDS = new Set<PageRequestKind>(["availability", "info", "create", "prompt", "destroy", "abort", "tool-result"]);
+const PLAYGROUND_KINDS = new Set<PageRequestKind>(["availability", "info", "models", "create", "prompt", "destroy", "abort", "tool-result"]);
 
 chrome.runtime.onConnect.addListener((port) => {
   const sender = port.sender;
@@ -341,7 +348,20 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
         throw new LLMError("QuotaExceededError", "Per-minute web search limit for this site reached; try again shortly");
       }
       searchLimiter.record(origin, 1);
-      return reply(conn, { kind: "result", id: req.id, value: await search(req.query, req.maxResults) });
+      const found = await search(req.query, req.maxResults, req.includeImages);
+      if (found.images?.length) searchedImages.remember(origin, found.images.map((i) => i.url));
+      return reply(conn, { kind: "result", id: req.id, value: found });
+    }
+
+    case "fetch-image": {
+      if (!searchedImages.has(origin, req.url)) {
+        throw new LLMError("NotAllowedError", "Only images returned by this site's localLLM.search() can be fetched");
+      }
+      if (!imageLimiter.allows(origin, 1, IMAGE_FETCHES_PER_MINUTE)) {
+        throw new LLMError("QuotaExceededError", "Per-minute image download limit for this site reached; try again shortly");
+      }
+      imageLimiter.record(origin, 1);
+      return reply(conn, { kind: "result", id: req.id, value: await fetchImageForPage(req.url) });
     }
 
     case "prompt":
@@ -373,11 +393,20 @@ async function handlePlaygroundRequest(conn: PageConn, req: PageRequest, backend
   const settings = await getSettings();
   // The playground shows raw requests and responses; web pages never get traces.
   const base = { ...hostBase(conn, settings), trace: true };
+  // Local models are listed and picked as for a site that allows only the local backend.
+  const localSite = defaultSite(PLAYGROUND_ORIGIN);
   switch (req.kind) {
+    case "models":
+      return reply(conn, { kind: "result", id: req.id, value: await siteModels(localSite, settings) });
     case "availability":
     case "info":
-    case "create":
-      return forward(conn, req, { ...base, backends: [{ id: backend, spec: await backendSpec(backend, settings) }] });
+    case "create": {
+      // "local:<catalog id>" names one downloaded model; "local" is the configured one.
+      const backends = backend.startsWith("local:")
+        ? (await chosenBackend(backend, localSite, settings)).backends
+        : [{ id: backend, spec: await backendSpec(backend, settings) }];
+      return forward(conn, req, { ...base, backends });
+    }
     case "prompt":
       checkProviderCap(await getUsage(), sessionBackends.get(req.sessionId) ?? backend, estimateMessageTokens(req.input), settings);
       return forward(conn, req, base);
@@ -482,6 +511,8 @@ async function revokeSite(origin: string, removePermission: boolean): Promise<vo
   await clearOnceGrants((o) => o === origin);
   limiter.forget(origin);
   searchLimiter.forget(origin);
+  imageLimiter.forget(origin);
+  searchedImages.forget(origin);
   for (const c of conns.values()) if (c.origin === origin) c.port.disconnect();
   await admin({ op: "revokeOrigin", origin }).catch(() => {});
   if (removePermission) await chrome.permissions.remove({ origins: [originPattern(origin)] }).catch(() => {});
@@ -506,7 +537,7 @@ type UIMessage =
   | { type: "site:reset-consent"; origin: string }
   | { type: "admin"; admin: AdminOp }
   | { type: "sessions" }
-  | { type: "tool:web_search"; args: { query?: unknown; max_results?: unknown } };
+  | { type: "tool:web_search"; args: { query?: unknown; max_results?: unknown; include_images?: unknown } };
 
 chrome.runtime.onMessage.addListener((msg: UIMessage, sender, sendResponse) => {
   // Only extension pages (options, popup, consent, offscreen host) may use these.
@@ -541,21 +572,21 @@ chrome.runtime.onMessage.addListener((msg: UIMessage, sender, sendResponse) => {
 });
 
 /** The playground's web_search tool. Same search as localLLM.search(), without the site gate. */
-async function webSearch(args: { query?: unknown; max_results?: unknown }) {
+async function webSearch(args: { query?: unknown; max_results?: unknown; include_images?: unknown }) {
   const maxResults = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Math.floor(Number(args?.max_results)) || 5));
-  return search(String(args?.query ?? ""), maxResults);
+  return search(String(args?.query ?? ""), maxResults, args?.include_images === true);
 }
 
 /** Tavily keys are read here and sent only to the host; Google runs in this worker. */
 const searchDeps: SearchDeps = {
   tavilyKey: () => getKey("tavily"),
   tavilyPermitted: () => chrome.permissions.contains({ origins: ["https://api.tavily.com/*"] }),
-  tavily: async (apiKey, query, maxResults) => (await admin({ op: "webSearch", apiKey, query, maxResults })) as TavilyOutcome,
+  tavily: async (apiKey, query, maxResults, includeImages) => (await admin({ op: "webSearch", apiKey, query, maxResults, includeImages })) as TavilyOutcome,
   googlePermitted,
   google: googleSearch,
 };
 
-const search = (query: string, maxResults: number) => runSearch(query, maxResults, searchDeps);
+const search = (query: string, maxResults: number, includeImages = false) => runSearch(query, maxResults, searchDeps, { includeImages });
 
 // ---- Lifecycle ------------------------------------------------------------
 
@@ -592,10 +623,10 @@ if (__TEST__) {
     /** Applies to page ports opened from now on. */
     setIdleCloseMs: (ms: number) => (idleCloseMs = ms),
     /** Replace the Google runner and skip Tavily, so e2e never reaches the network. */
-    setSearchStub(results: SearchResult[]) {
+    setSearchStub(results: SearchResult[], images: ImageResult[] = []) {
       searchDeps.tavilyKey = async () => null;
       searchDeps.googlePermitted = async () => true;
-      searchDeps.google = async (_q, n) => results.slice(0, n);
+      searchDeps.google = async (_q, n, withImages) => ({ results: results.slice(0, n), ...(withImages ? { images: images.slice(0, n) } : {}) });
     },
   };
 }

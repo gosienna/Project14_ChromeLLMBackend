@@ -66,6 +66,7 @@ describe("@local-llm/web", () => {
     w.LanguageModel = fakeLM();
     const native = (await getLanguageModel({ timeout: 10 }))!;
     expect(native.search).toBeNull();
+    expect(native.fetchImage).toBeNull();
     expect(webSearchTool(native)).toBeNull();
     const calls: unknown[] = [];
     w.localLLM = {
@@ -75,6 +76,8 @@ describe("@local-llm/web", () => {
     const tool = webSearchTool((await getLanguageModel({ timeout: 10 }))!, { maxResults: 3 })!;
     expect(tool.name).toBe("web_search");
     expect(JSON.parse(await tool.execute({ query: "cats" }))).toEqual({ query: "cats", provider: "google", results: [] });
-    expect(calls).toEqual([["cats", { maxResults: 3 }]]);
+    expect(calls).toEqual([["cats", { maxResults: 3, includeImages: false }]]);
+    await tool.execute({ query: "cats", include_images: true });
+    expect(calls[1]).toEqual(["cats", { maxResults: 3, includeImages: true }]);
   });
 });

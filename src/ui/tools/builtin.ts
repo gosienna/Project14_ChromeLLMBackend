@@ -44,11 +44,12 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     group: "web",
     confirm: false,
     description:
-      "Search the public web for current information. Returns titles, URLs, and relevant snippets (from Tavily, or a Google results page when Tavily isn't available). Use when the user asks about recent events, facts you are unsure of, or anything that may have changed since training.",
+      "Search the public web for current information. Returns titles, URLs, and relevant snippets (from Tavily, or a Google results page when Tavily isn't available), plus image URLs when include_images is true. Use when the user asks about recent events, facts you are unsure of, anything that may have changed since training, or wants pictures of something.",
     inputSchema: obj(
       {
         query: { type: "string", description: "Search query" },
         max_results: { type: "integer", description: "Number of results to return (1-10)", minimum: 1, maximum: 10 },
+        include_images: { type: "boolean", description: "Also return image URLs (with descriptions when available)" },
       },
       ["query"],
     ),

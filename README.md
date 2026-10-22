@@ -285,6 +285,9 @@ if (window.localLLM?.capabilities?.search) {
   const { provider, results, note } = await localLLM.search("chrome prompt api", { maxResults: 5 });
   // results: [{ title, url, snippet, score }]; provider: "tavily" | "google"
 
+  // With images: also returns images: [{ url, description?, sourceUrl?, thumbnail?, width?, height? }]
+  const { images } = await localLLM.search("eiffel tower", { maxResults: 5, includeImages: true });
+
   // In the model's tool loop: a page-declared tool whose execute() calls localLLM.search().
   const session = await LanguageModel.create({ tools: [localLLM.webSearchTool()] });
   const answer = await session.prompt("What changed in the latest Chrome release? Cite your sources.");
@@ -292,6 +295,8 @@ if (window.localLLM?.capabilities?.search) {
 ```
 
 - **Providers.** The extension uses Tavily with the user's key. When there's no key, or Tavily rejects it or is out of credits (401/403/429/432/433, a 5xx or a network failure), it opens a Google results page in a minimized window, reads the results and closes the window. That fallback needs the user to grant access to google.com (options → Tools). `note` says why the fallback was used.
+- **Images.** With `includeImages: true` (or `include_images` in the tool call), Tavily is asked for images with descriptions (same credit). The Google fallback opens the Images tab in the same minimized window after the web results and reads the top results' original image urls. If that page can't be read, you still get the web results, with `images: []` and a `note`.
+- **Keeping images.** `localLLM.fetchImage(url)` resolves to `{ url, type, blob }` for an image url this site's own `search()` returned (others are refused with `NotAllowedError`). PNG, JPEG, GIF, WebP, AVIF or BMP up to 8 MB; 30 downloads per minute. Hosts that don't allow cross-site downloads need the user to grant **Images for sites** (options → Tools).
 - **Gating.** Search needs the same consent as the model (Always, or an Allow-once grant in the visible tab) **and** the site's web search switch, which is off by default. Without it, `search()` rejects with `NotAllowedError`.
 - **Limits.** 10 searches per minute per site (`QuotaExceededError`). Google searches run one at a time, and Google may ask for verification (`NetworkError`).
 - `webSearchTool({ name?, maxResults? })` returns `{ name: "web_search", description, inputSchema, execute }`; the result the model sees is the `search()` response as JSON. `@local-llm/web` offers the same as `webSearchTool(found)` and `found.search`.
@@ -505,9 +510,10 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 | `window.localLLM.models()` | Extension only: the models your site can run now; see [Model information](#11-model-information) |
 | `LanguageModel.create({ model })` | Extension only: a `localLLM.models()` id; ignored by Chrome's native API |
 | `LanguageModel.create({ reasoning: true })` + `prompt*(input, { onReasoning })` | Extension only: deltas of a reasoning model's thinking; see [Reasoning](#reasoning-extension-only) |
-| `window.localLLM.search(query, { maxResults, signal })` | Extension only, when the user allowed web search for the site: `{ query, provider, results, note? }`; see [Web search](#web-search-extension-only) |
+| `window.localLLM.search(query, { maxResults, includeImages, signal })` | Extension only, when the user allowed web search for the site: `{ query, provider, results, images?, note? }`; see [Web search](#web-search-extension-only) |
+| `window.localLLM.fetchImage(url, { signal })` | Extension only: `{ url, type, blob }` for an image this site's search returned |
 | `window.localLLM.webSearchTool({ name, maxResults })` | Extension only: a `web_search` tool for `create({ tools })` |
-| `window.localLLM.capabilities` | Extension only: `{ search: true }` in versions with web search |
+| `window.localLLM.capabilities` | Extension only: `{ search: true, imageSearch: true, fetchImage: true }` in versions with web search, image results and image downloads |
 | `window.localLLM.version`, `window.localLLM.overridesNative` | Extension only |
 | `localllm:ready` event on `window` | Fired when the extension's API is injected |
 | `localllm:closed` event on `window` | Extension only: the connection closed. `detail.reason` is `"idle"` (no requests for 25s; the page's sessions are destroyed), `"disconnected"` or `"unresponsive"` (reload the page). The next call reconnects |

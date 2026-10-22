@@ -69,17 +69,34 @@ export interface SearchResult {
   score: number | null;
 }
 
+/** An image found for the query (search with includeImages). */
+export interface ImageResult {
+  /** The original image. */
+  url: string;
+  description?: string;
+  /** The page the image appears on, when known. */
+  sourceUrl?: string;
+  /** A small Google-hosted copy, when known. */
+  thumbnail?: string;
+  width?: number;
+  height?: number;
+}
+
 /** localLLM.search() result: from Tavily, or from a Google results page when Tavily isn't usable. */
 export interface SearchResponse {
   query: string;
   provider: "tavily" | "google";
   results: SearchResult[];
+  /** Only when includeImages was set: Tavily's images, or Google's Images tab. */
+  images?: ImageResult[];
   /** Why the Google fallback was used. */
   note?: string;
 }
 
 export interface SearchOptions {
   maxResults?: number;
+  /** Also return image urls. */
+  includeImages?: boolean;
   signal?: AbortSignal;
 }
 
@@ -103,11 +120,27 @@ export interface Found {
    * Chrome's native API or an extension version without search.
    */
   search: ((query: string, options?: SearchOptions) => Promise<SearchResponse>) | null;
+  /**
+   * Download an image that this site's search returned (search with includeImages), to keep a
+   * copy. Null without an extension version that supports it.
+   */
+  fetchImage: ((url: string, options?: { signal?: AbortSignal }) => Promise<FetchedImage>) | null;
+}
+
+export interface FetchedImage {
+  url: string;
+  type: string;
+  blob: Blob;
 }
 
 type Win = {
   LanguageModel?: LanguageModelStatic;
-  localLLM?: { info(): Promise<ExtensionInfo>; models?(): Promise<ModelInfo[]>; search?(query: string, options?: SearchOptions): Promise<SearchResponse> };
+  localLLM?: {
+    info(): Promise<ExtensionInfo>;
+    models?(): Promise<ModelInfo[]>;
+    search?(query: string, options?: SearchOptions): Promise<SearchResponse>;
+    fetchImage?(url: string, options?: { signal?: AbortSignal }): Promise<FetchedImage>;
+  };
 };
 
 const win = (): Win | undefined => (typeof window === "undefined" ? undefined : (window as unknown as Win));
@@ -124,6 +157,7 @@ function current(): Found | null {
     info: async () => (ext ? ext.info() : null),
     models: async () => (ext?.models ? ext.models() : []),
     search: ext?.search ? (query, options) => ext.search!(query, options) : null,
+    fetchImage: ext?.fetchImage ? (url, options) => ext.fetchImage!(url, options) : null,
   };
 }
 
@@ -136,16 +170,19 @@ export function webSearchTool(found: Found, { name = "web_search", maxResults = 
   if (!search) return null;
   return {
     name,
-    description: "Search the web. Returns a JSON list of results with title, url and snippet. Use it for current events or facts you are unsure of, and cite the urls you use.",
+    description:
+      "Search the web. Returns a JSON list of results with title, url and snippet, plus image urls when include_images is set. Use it for current events or facts you are unsure of, and cite the urls you use.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "The search query" },
         max_results: { type: "integer", minimum: 1, maximum: 10, description: `How many results (default ${maxResults})` },
+        include_images: { type: "boolean", description: "Also return image urls for the query" },
       },
       required: ["query"],
     },
-    execute: async (args) => JSON.stringify(await search(String(args.query ?? ""), { maxResults: Number(args.max_results) || maxResults })),
+    execute: async (args) =>
+      JSON.stringify(await search(String(args.query ?? ""), { maxResults: Number(args.max_results) || maxResults, includeImages: args.include_images === true })),
   };
 }
 

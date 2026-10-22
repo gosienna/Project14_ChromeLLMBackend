@@ -385,7 +385,7 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
       sessionsChanged();
       return null;
     case "webSearch":
-      return tavilySearch(op.apiKey, op.query, op.maxResults);
+      return tavilySearch(op.apiKey, op.query, op.maxResults, op.includeImages);
     case "stop": {
       // The user's Force stop: abort in-flight and queued requests, even ones whose page is stuck.
       let stopped = 0;
@@ -407,20 +407,39 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
  * Tavily Search, basic depth (1 credit). Ported from Project05's web_search tool. Failures come
  * back with their status so the router can decide whether to fall back to Google.
  */
-async function tavilySearch(apiKey: string, query: string, maxResults: number): Promise<TavilyOutcome> {
+async function tavilySearch(apiKey: string, query: string, maxResults: number, includeImages = false): Promise<TavilyOutcome> {
   let res: Response;
   try {
     res = await fetch("https://api.tavily.com/search", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ query, search_depth: "basic", max_results: maxResults, include_answer: false }),
+      body: JSON.stringify({
+        query,
+        search_depth: "basic",
+        max_results: maxResults,
+        include_answer: false,
+        ...(includeImages ? { include_images: true, include_image_descriptions: true } : {}),
+      }),
     });
   } catch (e) {
     return { ok: false, status: "network", message: String((e as Error)?.message ?? e) };
   }
-  const body = (await res.json().catch(() => null)) as { query?: string; results?: Array<{ title: string; url: string; content: string; score?: number }>; detail?: unknown; error?: unknown } | null;
+  const body = (await res.json().catch(() => null)) as {
+    query?: string;
+    results?: Array<{ title: string; url: string; content: string; score?: number }>;
+    images?: Array<string | { url: string; description?: string }>;
+    detail?: unknown;
+    error?: unknown;
+  } | null;
   if (!res.ok) return { ok: false, status: res.status, message: `Tavily: ${JSON.stringify(body?.detail ?? body?.error ?? res.status)}` };
-  return { ok: true, query: body?.query ?? query, results: (body?.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: r.content, score: r.score ?? null })) };
+  const results = (body?.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: r.content, score: r.score ?? null }));
+  if (!includeImages) return { ok: true, query: body?.query ?? query, results };
+  // Plain urls, or { url, description } with include_image_descriptions.
+  const images = (body?.images ?? [])
+    .map((i) => (typeof i === "string" ? { url: i } : { url: i.url, ...(i.description ? { description: i.description } : {}) }))
+    .filter((i) => typeof i.url === "string" && /^https?:\/\//.test(i.url))
+    .slice(0, maxResults);
+  return { ok: true, query: body?.query ?? query, results, images };
 }
 
 chrome.runtime.onConnect.addListener((p) => {

@@ -8,17 +8,33 @@ export interface SearchResult {
   score: number | null;
 }
 
+/** An image found for the query. */
+export interface ImageResult {
+  /** The original image. */
+  url: string;
+  /** Tavily's description, or the image's alt text on Google. */
+  description?: string;
+  /** The page the image appears on, when known. */
+  sourceUrl?: string;
+  /** A small Google-hosted copy, when known. */
+  thumbnail?: string;
+  width?: number;
+  height?: number;
+}
+
 export interface SearchResponse {
   query: string;
   provider: "tavily" | "google";
   results: SearchResult[];
+  /** Only when images were asked for. */
+  images?: ImageResult[];
   /** Why the fallback was used, when it was. */
   note?: string;
 }
 
 /** What the offscreen host's webSearch op resolves to. */
 export type TavilyOutcome =
-  | { ok: true; query: string; results: SearchResult[] }
+  | { ok: true; query: string; results: SearchResult[]; images?: ImageResult[] }
   | { ok: false; status: number | "network"; message: string };
 
 /** Why Tavily was skipped or failed: an HTTP status, a network error, or it isn't set up. */
@@ -132,3 +148,106 @@ function unwrapGoogleHref(href: string): string | null {
 }
 
 const clean = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/** Google's Images tab. */
+export function googleImagesUrl(query: string): string {
+  return `https://www.google.com/search?${new URLSearchParams({ q: query, udm: "2", hl: "en" })}`;
+}
+
+/** What the in-page image collector returns, before cleanup. */
+export interface GoogleImagesRaw {
+  blocked: boolean;
+  /** `["url",height,width]` triples from the page's inline data, in page order; urls still JSON-escaped. */
+  data: Array<{ url: string; h: number; w: number }>;
+  /** `/imgres?imgurl=…&imgrefurl=…` links (older layouts). */
+  links: string[];
+  /** Result thumbnails with their alt text. */
+  thumbs: Array<{ src: string; alt: string }>;
+}
+
+/**
+ * Runs in the Google Images tab via chrome.scripting.executeScript, so it must not reference
+ * anything outside its own body. Google embeds each result's original image url in inline
+ * script data as ["url",height,width], right after its thumbnail's triple.
+ */
+export function collectGoogleImages(): GoogleImagesRaw {
+  const blocked =
+    location.hostname.startsWith("consent.") ||
+    location.pathname.startsWith("/sorry") ||
+    !!document.querySelector('#captcha-form, form[action*="sorry"]');
+  const data: GoogleImagesRaw["data"] = [];
+  const re = /\["(https?:\/\/[^"\s]{8,2000}?)",(\d+),(\d+)\]/g;
+  for (const s of Array.from(document.scripts)) {
+    const text = s.textContent ?? "";
+    for (const m of text.matchAll(re)) {
+      data.push({ url: m[1], h: Number(m[2]), w: Number(m[3]) });
+      if (data.length >= 400) break;
+    }
+  }
+  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/imgres?"]'), (a) => a.href).slice(0, 100);
+  const thumbs = Array.from(document.querySelectorAll<HTMLImageElement>('img[src^="https://encrypted-tbn"]'), (i) => ({ src: i.src, alt: i.alt })).slice(0, 100);
+  return { blocked, data, links, thumbs };
+}
+
+const isGoogleHost = (host: string) => /(^|\.)google\.[a-z.]+$/.test(host) || /(^|\.)gstatic\.com$/.test(host);
+
+function httpUrl(s: string | null | undefined): URL | null {
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    return u.protocol === "https:" || u.protocol === "http:" ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Decode a JSON-escaped string from Google's inline data (\u003d, \/ and so on). */
+function unescapeJson(s: string): string {
+  try {
+    return JSON.parse(`"${s}"`) as string;
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * Original image urls from the Images tab: inline data first (pairing each with the thumbnail
+ * triple before it), then /imgres links, then bare thumbnails if nothing else was found.
+ */
+export function normalizeGoogleImages(raw: GoogleImagesRaw, max: number): ImageResult[] {
+  const seen = new Set<string>();
+  const out: ImageResult[] = [];
+  const add = (img: ImageResult) => {
+    if (out.length >= max || seen.has(img.url)) return;
+    seen.add(img.url);
+    out.push(img);
+  };
+  const alts = new Map(raw.thumbs.map((t) => [t.src, clean(t.alt)]));
+  let thumb: string | undefined;
+  for (const d of raw.data) {
+    const u = httpUrl(unescapeJson(d.url));
+    if (!u) continue;
+    if (isGoogleHost(u.hostname)) {
+      if (/(^|\.)gstatic\.com$/.test(u.hostname)) thumb = u.href;
+      continue;
+    }
+    const description = thumb ? alts.get(thumb) : undefined;
+    add({ url: u.href, ...(description ? { description } : {}), ...(thumb ? { thumbnail: thumb } : {}), width: d.w, height: d.h });
+    thumb = undefined;
+  }
+  for (const href of raw.links) {
+    const link = httpUrl(href) ?? httpUrl(new URL(href, "https://www.google.com").href);
+    const img = httpUrl(link?.searchParams.get("imgurl"));
+    if (!img || isGoogleHost(img.hostname)) continue;
+    const source = httpUrl(link?.searchParams.get("imgrefurl"));
+    add({ url: img.href, ...(source ? { sourceUrl: source.href } : {}) });
+  }
+  if (!out.length) {
+    for (const t of raw.thumbs) {
+      const u = httpUrl(t.src);
+      const description = clean(t.alt);
+      if (u) add({ url: u.href, ...(description ? { description } : {}), thumbnail: u.href });
+    }
+  }
+  return out;
+}
