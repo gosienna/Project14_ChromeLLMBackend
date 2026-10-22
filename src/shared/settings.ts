@@ -10,8 +10,12 @@ export interface Limits {
   maxSessions: number;
   tokensPerMinute: number;
   maxContext: number;
+  /** When set, `maxContext` is kept but ignored: a session uses the model's own context window. */
+  maxContextUnlimited?: boolean;
   /** Cap on generated tokens per prompt (max_tokens); also bounded by the context left. */
   maxOutputTokens: number;
+  /** When set, `maxOutputTokens` is kept but ignored: a reply may use the context still free. */
+  maxOutputUnlimited?: boolean;
 }
 
 export interface Settings {
@@ -43,6 +47,8 @@ export interface SiteConfig {
   dailyTokenUnlimited?: boolean;
   /** Fall back from local to another allowed backend when WebGPU/local is unavailable. */
   allowFallback: boolean;
+  /** The site may call localLLM.search(). Absent: off. */
+  webSearch?: boolean;
 }
 
 export interface UsageEntry {
@@ -63,8 +69,26 @@ export const DEFAULT_SETTINGS: Settings = {
   ),
   customProviders: [],
   idleUnloadMinutes: 10,
-  limits: { maxSessions: 2, tokensPerMinute: 20_000, maxContext: 8192, maxOutputTokens: 16384 },
+  limits: { maxSessions: 2, tokensPerMinute: 20_000, maxContext: 8192, maxContextUnlimited: false, maxOutputTokens: 16384, maxOutputUnlimited: false },
 };
+
+/** The user's context cap. Unlimited is a finite stand-in: extension messages are JSON, and Infinity becomes null. */
+export function effectiveMaxContext(limits: Pick<Limits, "maxContext" | "maxContextUnlimited">): number {
+  return limits.maxContextUnlimited ? Number.MAX_SAFE_INTEGER : limits.maxContext;
+}
+
+/** The user's output cap. Unlimited is a finite stand-in so a reply can use the context still free. */
+export function effectiveMaxOutput(limits: Pick<Limits, "maxOutputTokens" | "maxOutputUnlimited">): number {
+  return limits.maxOutputUnlimited ? Number.MAX_SAFE_INTEGER : limits.maxOutputTokens;
+}
+
+/**
+ * A cap after it has crossed `chrome.runtime` messaging. Non-finite values (Infinity serialized
+ * as null) must not reach `Math.min`, which would treat them as 0 and reject every prompt.
+ */
+export function receivedCap(n: number): number {
+  return Number.isFinite(n) && n > 0 ? n : Number.MAX_SAFE_INTEGER;
+}
 
 export function defaultSite(origin: string): SiteConfig {
   return { origin, allowedBackends: ["local"], backend: "local", dailyTokenCap: 200_000, allowFallback: false };

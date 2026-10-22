@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { listModels, parseModelId, type ModelListInput } from "../src/background/models";
 import type { DeviceCaps } from "../src/shared/catalog";
 import { BUILTIN_PROVIDERS, customProvider } from "../src/shared/providers";
-import { DEFAULT_SETTINGS, defaultSite, type Settings, type SiteConfig } from "../src/shared/settings";
+import { DEFAULT_SETTINGS, defaultSite, effectiveMaxContext, effectiveMaxOutput, type Settings, type SiteConfig } from "../src/shared/settings";
 
 const GPU: DeviceCaps = { webgpu: true, maxBufferMB: 1024, jspi: true, mem64: true };
 const CPU: DeviceCaps = { webgpu: false, maxBufferMB: 0, jspi: true, mem64: true };
@@ -102,6 +102,35 @@ describe("cloud models", () => {
   it("caps output by the model's own limit and the user's", () => {
     const m = listModels(input({ site: cloudSite, providers: [anthropic] })).find((x) => x.id === "anthropic:claude-haiku-5-5")!;
     expect(m).toMatchObject({ inputQuota: DEFAULT_SETTINGS.limits.maxContext, maxOutputTokens: Math.min(DEFAULT_SETTINGS.limits.maxOutputTokens, DEFAULT_SETTINGS.limits.maxContext) });
+  });
+
+  it("uses the model window when context is unlimited", () => {
+    const s = settings();
+    s.limits = { ...s.limits, maxContextUnlimited: true };
+    const local = listModels(input({ settings: s, host: { caps: GPU, downloaded: ["wllama:qwen3-0.6b"], nano: false } }))[0];
+    expect(local).toMatchObject({ contextWindow: 40960, inputQuota: 40960 });
+    const cloud = listModels(input({ settings: s, site: cloudSite, providers: [anthropic] })).find((x) => x.id === "anthropic:claude-haiku-5-5")!;
+    expect(cloud.inputQuota).toBe(cloud.contextWindow);
+  });
+
+  it("lets a reply use the context left when output is unlimited", () => {
+    const s = settings();
+    s.limits = { ...s.limits, maxContext: 4096, maxOutputUnlimited: true };
+    const local = listModels(input({ settings: s, host: { caps: GPU, downloaded: ["wllama:qwen3-0.6b"], nano: false } }))[0];
+    expect(local).toMatchObject({ inputQuota: 4096, maxOutputTokens: 4096 });
+    const cloud = listModels(input({ settings: s, site: cloudSite, providers: [anthropic] })).find((x) => x.id === "anthropic:claude-haiku-5-5")!;
+    expect(cloud.maxOutputTokens).toBe(4096);
+  });
+
+  it("keeps an unlimited cap finite across JSON messaging", () => {
+    const limits = { ...DEFAULT_SETTINGS.limits, maxContextUnlimited: true, maxOutputUnlimited: true };
+    const wire = JSON.parse(JSON.stringify({ maxContext: effectiveMaxContext(limits), maxOutputTokens: effectiveMaxOutput(limits) })) as {
+      maxContext: number;
+      maxOutputTokens: number;
+    };
+    expect(wire.maxContext).toBeGreaterThan(131072);
+    expect(Math.min(131072, wire.maxContext)).toBe(131072);
+    expect(Math.min(wire.maxOutputTokens, 5000)).toBe(5000);
   });
 
   it("orders default first, then by allowed backends", () => {

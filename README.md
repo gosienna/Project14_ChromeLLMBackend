@@ -27,6 +27,7 @@ console.log(await session.prompt("Write a haiku about browsers"));
    - [Cancelling](#8-cancelling)
    - [Cloning and destroying sessions](#9-cloning-and-destroying-sessions)
    - [Tool calling](#10-tool-calling)
+     - [Web search](#web-search-extension-only)
    - [Model information](#11-model-information)
    - [Errors](#12-errors)
    - [Limits](#13-limits)
@@ -62,7 +63,7 @@ npm run build               # -> dist/
 1. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and choose `dist/`.
 2. Open the extension's options page (toolbar icon → **Settings, models and usage**) and pick a local model. Optionally click **Download / load** to fetch the weights now. Otherwise they download on first use (Qwen2.5 0.5B, about 480 MB).
 3. Optional: under **Cloud providers**, enable a provider, pick a model and paste your API key. The model picker and the **Models** tables list each provider's current and legacy models with input → output types, context size, reasoning, tool calling and list price (any other model id can be typed in). Defaults: Claude Haiku 5.5, GPT-6 Luna, Gemini 3.8 Flash, Grok 4.3, DeepSeek V4.1 Flash, OpenRouter Auto.
-4. To try it out, click the toolbar icon → **Open playground**. It's a chat page inside the extension. Pick the local model or any enabled provider, and attach, paste or drop images. Images work with cloud providers, Chrome's built-in model and local vision models (shown as `text+image→text` in the options). Replies render Markdown (headings, lists, tables, code, links) and LaTeX math (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`, via bundled KaTeX); Session options can switch to plain text. Each reply has a **Raw** view with the exact request the model received and its raw response for every tool round, and **Show raw** previews the next request; **Edit JSON** lets you change it before sending. The **Tools** panel gives the model the extension's own tools: browser automation on your tabs, Tavily web search (key in options → Tools), tools you write (sandboxed JavaScript), and registry tools that let the model create and edit tools. They're off until you enable them, risky ones ask before each run, and websites never get them. Playground conversations aren't tied to a website and aren't saved.
+4. To try it out, click the toolbar icon → **Open playground**. It's a chat page inside the extension. Pick the local model or any enabled provider, and attach, paste or drop images. Images work with cloud providers, Chrome's built-in model and local vision models (shown as `text+image→text` in the options). Replies render Markdown (headings, lists, tables, code, links) and LaTeX math (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`, via bundled KaTeX); Session options can switch to plain text. Each reply has a **Raw** view with the exact request the model received and its raw response for every tool round, and **Show raw** previews the next request; **Edit JSON** lets you change it before sending. The **Tools** panel gives the model the extension's own tools: browser automation on your tabs, web search (Tavily with a key from options → Tools, or a Google results page as fallback), tools you write (sandboxed JavaScript), and registry tools that let the model create and edit tools. They're off until you enable them, risky ones ask before each run, and websites never get them. Playground conversations aren't tied to a website and aren't saved.
 
 Requires Chrome 116 or later. Local models run fastest with WebGPU; without it the extension falls back to CPU (wllama). Models larger than about 3.5 GB (up to Qwen3.5 122B) run on wllama with WebGPU and need Chrome 137+ (JSPI and Memory64) and enough GPU memory: unified memory on Apple Silicon, VRAM elsewhere.
 
@@ -274,6 +275,27 @@ console.log(await session.prompt("Should I take an umbrella in Paris today?"));
 - **Tool results become model input,** and they count toward the context window and the site's token limits. Return only what the model needs.
 - `clone()` keeps the tools. Tools must have unique names made of letters, digits, `_` or `-`, and a session can have at most 32. Malformed tools make `create()` throw a `TypeError`.
 
+#### Web search (extension only)
+
+If the user ticks **Allow web search** for your site (options → Sites), your page can search the web through the extension. You can call it directly, or hand the model a ready-made tool:
+
+```js
+if (window.localLLM?.capabilities?.search) {
+  // Direct: up to 10 results.
+  const { provider, results, note } = await localLLM.search("chrome prompt api", { maxResults: 5 });
+  // results: [{ title, url, snippet, score }]; provider: "tavily" | "google"
+
+  // In the model's tool loop: a page-declared tool whose execute() calls localLLM.search().
+  const session = await LanguageModel.create({ tools: [localLLM.webSearchTool()] });
+  const answer = await session.prompt("What changed in the latest Chrome release? Cite your sources.");
+}
+```
+
+- **Providers.** The extension uses Tavily with the user's key. When there's no key, or Tavily rejects it or is out of credits (401/403/429/432/433, a 5xx or a network failure), it opens a Google results page in a minimized window, reads the results and closes the window. That fallback needs the user to grant access to google.com (options → Tools). `note` says why the fallback was used.
+- **Gating.** Search needs the same consent as the model (Always, or an Allow-once grant in the visible tab) **and** the site's web search switch, which is off by default. Without it, `search()` rejects with `NotAllowedError`.
+- **Limits.** 10 searches per minute per site (`QuotaExceededError`). Google searches run one at a time, and Google may ask for verification (`NetworkError`).
+- `webSearchTool({ name?, maxResults? })` returns `{ name: "web_search", description, inputSchema, execute }`; the result the model sees is the `search()` response as JSON. `@local-llm/web` offers the same as `webSearchTool(found)` and `found.search`.
+
 ### 11. Model information
 
 The extension adds a small non-standard namespace, which is absent with Chrome's native API:
@@ -342,7 +364,7 @@ All failures reject with a `DOMException`. Check `error.name`:
 
 | `name` | When | Suggested handling |
 | --- | --- | --- |
-| `NotAllowedError` | The user denied consent or revoked the site; a background tab tried to use the model without "Always" consent; a cloud key is missing or locked | Fall back; explain how to enable |
+| `NotAllowedError` | The user denied consent or revoked the site; a background tab tried to use the model without "Always" consent; a cloud key is missing or locked; `localLLM.search()` without the site's web search switch, or with no search provider set up | Fall back; explain how to enable |
 | `QuotaExceededError` | Too many open sessions; a per-minute, daily or monthly token limit reached; a prompt larger than the context window | Destroy unused sessions, retry later, or shorten input |
 | `AbortError` | Your `signal` was aborted, or the session was destroyed | Usually ignore |
 | `InvalidStateError` | The session was destroyed, or the extension restarted and lost it | Create a new session |
@@ -364,6 +386,7 @@ The user can change all of these in the extension's options; the defaults are:
 | Tokens per day per site | 200,000 | `QuotaExceededError` |
 | Max context per session | 8,192 tokens | Oldest turns dropped; `QuotaExceededError` if one prompt is too large |
 | Monthly tokens per cloud provider | 2,000,000 | `QuotaExceededError` |
+| Web searches per minute per site | 10 (fixed) | `QuotaExceededError` on `localLLM.search()` |
 
 Also:
 - Local generation is queued: one request runs at a time across all sites, so expect some waiting under load.
@@ -482,8 +505,12 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 | `window.localLLM.models()` | Extension only: the models your site can run now; see [Model information](#11-model-information) |
 | `LanguageModel.create({ model })` | Extension only: a `localLLM.models()` id; ignored by Chrome's native API |
 | `LanguageModel.create({ reasoning: true })` + `prompt*(input, { onReasoning })` | Extension only: deltas of a reasoning model's thinking; see [Reasoning](#reasoning-extension-only) |
+| `window.localLLM.search(query, { maxResults, signal })` | Extension only, when the user allowed web search for the site: `{ query, provider, results, note? }`; see [Web search](#web-search-extension-only) |
+| `window.localLLM.webSearchTool({ name, maxResults })` | Extension only: a `web_search` tool for `create({ tools })` |
+| `window.localLLM.capabilities` | Extension only: `{ search: true }` in versions with web search |
 | `window.localLLM.version`, `window.localLLM.overridesNative` | Extension only |
 | `localllm:ready` event on `window` | Fired when the extension's API is injected |
+| `localllm:closed` event on `window` | Extension only: the connection closed. `detail.reason` is `"idle"` (no requests for 25s; the page's sessions are destroyed), `"disconnected"` or `"unresponsive"` (reload the page). The next call reconnects |
 | Not yet | `responseConstraint`, image/audio input from pages, `quotaoverflow` event |
 
 ### Security and privacy notes for app developers
@@ -491,7 +518,7 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 - **Your site never handles keys or model files.** Cloud keys stay inside the extension; your page receives model output only.
 - **The user controls the backend.** A site may be served by a local model or by a cloud provider the user allowed for it. Your site can pick among those models with `create({ model })`, but never outside them. When cloud is used, the consent dialog tells the user that prompts leave their device and are billed to their key. Don't assume prompts stay on the device.
 - **All scripts on an approved site share access.** Once the user approves your origin, any script running on it can call the model, third-party ads and analytics included. Keep untrusted scripts off pages that use it, or use a dedicated subdomain.
-- **No browsing data crosses over.** The API exposes only text generation: no page content, tabs, history or extension features.
+- **No browsing data crosses over.** The API exposes text generation and, where the user allows it, web search results. No page content, tabs, history or other extension features. The Google fallback's window runs in the user's profile, so results may be personalized; the page gets only titles, urls and snippets.
 - **Usage is visible to the user.** The extension logs origin, time and token counts (never prompt text), and the user can revoke your site at any time. Handle `NotAllowedError` gracefully.
 
 ---

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TokenRateLimiter, estimateCost, exceedsDailyTokenCap, providerTokensThisMonth, siteTokensToday } from "../src/background/limits";
+import { TokenRateLimiter, estimateCost, exceedsDailyTokenCap, idleCloseIn, providerTokensThisMonth, siteTokensToday } from "../src/background/limits";
 
 describe("TokenRateLimiter", () => {
   it("enforces a sliding one-minute window per origin", () => {
@@ -32,5 +32,17 @@ describe("spend caps", () => {
   it("estimates cost for cloud only", () => {
     expect(estimateCost(usage[0])).toBe(0);
     expect(estimateCost({ ...usage[1], inputTokens: 1_000_000, outputTokens: 0 })).toBeCloseTo(0.1);
+  });
+});
+
+describe("idleCloseIn", () => {
+  it("closes once the period has passed with nothing in flight", () => {
+    expect(idleCloseIn(1000, 1000, false, 25_000)).toBe(25_000);
+    expect(idleCloseIn(1000, 21_000, false, 25_000)).toBe(5_000);
+    expect(idleCloseIn(1000, 26_000, false, 25_000)).toBe("close");
+  });
+
+  it("never closes a busy connection", () => {
+    expect(idleCloseIn(0, 1_000_000, true, 25_000)).toBe(25_000);
   });
 });

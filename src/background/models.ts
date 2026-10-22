@@ -6,7 +6,7 @@ import { CATALOG, ENGINE_PREFERENCE, canRun, contextLimit, findModel, resolveEng
 import { PRICES_AS_OF, UNLISTED_CONTEXT, cloudModels, type CloudModel } from "../shared/cloud-models";
 import type { ModelInfo } from "../shared/protocol";
 import type { ProviderDef } from "../shared/providers";
-import type { Settings, SiteConfig } from "../shared/settings";
+import { effectiveMaxContext, effectiveMaxOutput, type Settings, type SiteConfig } from "../shared/settings";
 
 export interface ModelListInput {
   settings: Settings;
@@ -36,7 +36,8 @@ function localModels({ settings, site, host }: ModelListInput): ModelInfo[] {
   if (!host || !site.allowedBackends.includes("local")) return [];
   const { caps, downloaded, nano } = host;
   const configured = configuredLocalModel(settings);
-  const { maxContext, maxOutputTokens } = settings.limits;
+  const maxContext = effectiveMaxContext(settings.limits);
+  const maxOutputTokens = effectiveMaxOutput(settings.limits);
   const out: ModelInfo[] = [];
   for (const model of CATALOG) {
     // Same rules as LocalRuntime.availability: weights on disk and a build this device can run.
@@ -71,7 +72,7 @@ function localModels({ settings, site, host }: ModelListInput): ModelInfo[] {
 }
 
 function cloudEntry(provider: ProviderDef, m: CloudModel, isDefault: boolean, settings: Settings): ModelInfo {
-  const inputQuota = Math.min(m.contextWindow, settings.limits.maxContext);
+  const inputQuota = Math.min(m.contextWindow, effectiveMaxContext(settings.limits));
   return {
     id: `${provider.id}:${m.id}`,
     name: m.name,
@@ -82,7 +83,7 @@ function cloudEntry(provider: ProviderDef, m: CloudModel, isDefault: boolean, se
     output: ["text"],
     contextWindow: m.contextWindow,
     inputQuota,
-    maxOutputTokens: Math.min(m.maxOutput ?? Infinity, settings.limits.maxOutputTokens, inputQuota),
+    maxOutputTokens: Math.min(m.maxOutput ?? Infinity, effectiveMaxOutput(settings.limits), inputQuota),
     ...(m.reasoning ? { reasoning: m.reasoning } : {}),
     tools: m.tools,
     price: m.price ? { ...m.price, asOf: PRICES_AS_OF } : null,

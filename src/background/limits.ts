@@ -37,6 +37,16 @@ export class TokenRateLimiter {
   }
 }
 
+/**
+ * When to close an idle page connection: "close" now, or the ms to wait before checking again.
+ * A connection with requests in flight is never idle; it is checked again a full period later.
+ */
+export function idleCloseIn(lastActivity: number, now: number, busy: boolean, idleMs: number): number | "close" {
+  if (busy) return idleMs;
+  const left = lastActivity + idleMs - now;
+  return left <= 0 ? "close" : left;
+}
+
 export function startOfDay(now: number): number {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);

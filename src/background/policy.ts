@@ -31,6 +31,9 @@ export function gate({ kind, site, permitted, onceGrant, visible }: GateInput): 
   if (kind === "availability" || kind === "params" || kind === "info" || kind === "models") return { action: "allow" };
   if (site.consent === "deny") return deny("The user denied this site access to the model");
 
+  // Search spends the user's Tavily credits or opens a Google window, so it needs its own switch.
+  if (kind === "search" && site.webSearch !== true) return deny("Web search is not enabled for this site (extension options → Sites)");
+
   const always = site.consent === "always";
   if (always) return { action: "allow" };
   if (!visible) return deny("Background tabs may not use the model without \"Always\" consent");

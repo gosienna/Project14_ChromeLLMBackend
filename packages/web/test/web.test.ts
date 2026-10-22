@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createOrFallback, detect, getLanguageModel } from "../src/index";
+import { createOrFallback, detect, getLanguageModel, webSearchTool } from "../src/index";
 
 const g = globalThis as Record<string, unknown>;
 
@@ -59,5 +59,22 @@ describe("@local-llm/web", () => {
     expect(await createOrFallback({ fallback: (r) => `fb:${r}`, timeout: 10 })).toBe("fb:unavailable");
     w.LanguageModel = { availability: async () => "available", create: async () => { throw Object.assign(new Error("no"), { name: "NotAllowedError" }); } };
     expect(await createOrFallback({ fallback: (r) => r, timeout: 10 })).toBe("NotAllowedError: no");
+  });
+
+  it("offers search and a web_search tool only through the extension", async () => {
+    const w = fakeWindow();
+    w.LanguageModel = fakeLM();
+    const native = (await getLanguageModel({ timeout: 10 }))!;
+    expect(native.search).toBeNull();
+    expect(webSearchTool(native)).toBeNull();
+    const calls: unknown[] = [];
+    w.localLLM = {
+      info: async () => null,
+      search: async (q: string, o: unknown) => (calls.push([q, o]), { query: q, provider: "google", results: [] }),
+    };
+    const tool = webSearchTool((await getLanguageModel({ timeout: 10 }))!, { maxResults: 3 })!;
+    expect(tool.name).toBe("web_search");
+    expect(JSON.parse(await tool.execute({ query: "cats" }))).toEqual({ query: "cats", provider: "google", results: [] });
+    expect(calls).toEqual([["cats", { maxResults: 3 }]]);
   });
 });

@@ -10,7 +10,13 @@ import { CloudBackend } from "./cloud-backend";
 import { nanoSupported } from "./engines/nano";
 import { LocalBackend, LocalRuntime } from "./local-runtime";
 import { withTools } from "./tools/with-tools";
+import { installLargeFetch } from "./large-fetch";
 import { sanitizeTrace } from "./trace";
+import type { TavilyOutcome } from "../shared/search";
+import { receivedCap } from "../shared/settings";
+
+// Before any engine fetch: GGUFs over 2 GiB (MedGemma 27B) are downloaded in ranges.
+installLargeFetch();
 
 declare const __VERSION__: string;
 
@@ -206,7 +212,7 @@ async function handle(req: HostRequest): Promise<void> {
         tools,
         temperature: r.options.temperature ?? p.defaultTemperature,
         topK: Math.min(r.options.topK ?? p.defaultTopK, p.maxTopK),
-        quota: Math.min(backend.contextWindow(), req.limits.maxContext),
+        quota: Math.min(backend.contextWindow(), receivedCap(req.limits.maxContext)),
         usage: history.length ? await backend.countTokens(history) : 0,
         running: new Set(),
         chain: Promise.resolve(),
@@ -250,7 +256,7 @@ async function handle(req: HostRequest): Promise<void> {
             {
               temperature: s.temperature,
               topK: s.topK,
-              maxTokens: Math.min(req.limits.maxOutputTokens, Math.max(16, s.quota - tokens)),
+              maxTokens: Math.min(receivedCap(req.limits.maxOutputTokens), Math.max(16, s.quota - tokens)),
               onReasoning: (text) => respond(rid, { kind: "reasoning", text }),
               tools: offered,
               ...(req.trace ? { onTrace: (t) => respond(rid, { kind: "trace", round, trace: sanitizeTrace(t) as typeof t }) } : {}),
@@ -373,16 +379,24 @@ async function handleAdmin(rid: string, op: AdminOp): Promise<unknown> {
   }
 }
 
-/** Tavily Search, basic depth (1 credit). Ported from Project05's web_search tool. */
-async function tavilySearch(apiKey: string, query: string, maxResults: number) {
-  const res = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ query, search_depth: "basic", max_results: maxResults, include_answer: false }),
-  });
+/**
+ * Tavily Search, basic depth (1 credit). Ported from Project05's web_search tool. Failures come
+ * back with their status so the router can decide whether to fall back to Google.
+ */
+async function tavilySearch(apiKey: string, query: string, maxResults: number): Promise<TavilyOutcome> {
+  let res: Response;
+  try {
+    res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ query, search_depth: "basic", max_results: maxResults, include_answer: false }),
+    });
+  } catch (e) {
+    return { ok: false, status: "network", message: String((e as Error)?.message ?? e) };
+  }
   const body = (await res.json().catch(() => null)) as { query?: string; results?: Array<{ title: string; url: string; content: string; score?: number }>; detail?: unknown; error?: unknown } | null;
-  if (!res.ok) throw new Error(`Tavily: ${JSON.stringify(body?.detail ?? body?.error ?? res.status)}`);
-  return { query: body?.query ?? query, results: (body?.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: r.content, score: r.score ?? null })) };
+  if (!res.ok) return { ok: false, status: res.status, message: `Tavily: ${JSON.stringify(body?.detail ?? body?.error ?? res.status)}` };
+  return { ok: true, query: body?.query ?? query, results: (body?.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: r.content, score: r.score ?? null })) };
 }
 
 chrome.runtime.onConnect.addListener((p) => {

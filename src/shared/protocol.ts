@@ -139,7 +139,9 @@ export type PageRequest =
   | { kind: "destroy"; id: string; sessionId: string }
   | { kind: "abort"; id: string; target: string }
   /** The page ran a tool the model called during prompt `target`. */
-  | { kind: "tool-result"; id: string; target: string; callId: string; result: string; isError: boolean };
+  | { kind: "tool-result"; id: string; target: string; callId: string; result: string; isError: boolean }
+  /** Web search (Tavily, falling back to a Google results tab). Only for sites with web search on. */
+  | { kind: "search"; id: string; query: string; maxResults: number };
 
 export type PageRequestKind = PageRequest["kind"];
 
@@ -174,6 +176,12 @@ export type PageResponse =
 
 export type PageResponseKind = PageResponse["kind"];
 
+/**
+ * Router -> bridge messages about the port itself, not about a request. `connected` is the
+ * first message on every page port; `closed` comes right before the router closes an idle one.
+ */
+export type PortNotice = { kind: "connected" } | { kind: "closed"; reason: "idle" };
+
 // ---- Validation -----------------------------------------------------------
 
 const MAX_ID = 64;
@@ -186,6 +194,8 @@ export const MAX_TOOLS = 32;
 const MAX_TOOL_DESCRIPTION = 4096;
 const MAX_TOOL_SCHEMA = 65_536;
 const MAX_MODEL_ID = 256;
+export const MAX_SEARCH_QUERY = 500;
+export const MAX_SEARCH_RESULTS = 10;
 export const TOOL_NAME = /^[A-Za-z_][\w-]{0,63}$/;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -267,6 +277,7 @@ const FIELDS: Record<PageRequestKind, string[]> = {
   destroy: ["sessionId"],
   abort: ["target"],
   "tool-result": ["target", "callId", "result", "isError"],
+  search: ["query", "maxResults"],
 };
 
 /**
@@ -304,6 +315,11 @@ export function parsePageRequest(v: unknown, { images = false }: { images?: bool
       return isId(v.target) && isId(v.callId) && typeof v.result === "string" && v.result.length <= MAX_TEXT && typeof v.isError === "boolean"
         ? (v as PageRequest)
         : null;
+    case "search":
+      return typeof v.query === "string" && v.query.trim().length > 0 && v.query.length <= MAX_SEARCH_QUERY &&
+        Number.isInteger(v.maxResults) && (v.maxResults as number) >= 1 && (v.maxResults as number) <= MAX_SEARCH_RESULTS
+        ? (v as PageRequest)
+        : null;
   }
 }
 
@@ -327,6 +343,14 @@ export function parsePageResponse(v: unknown): PageResponse | null {
     default:
       return null;
   }
+}
+
+export function parsePortNotice(v: unknown): PortNotice | null {
+  if (!isObj(v)) return null;
+  const keys = Object.keys(v).sort().join(",");
+  if (v.kind === "connected" && keys === "kind") return { kind: "connected" };
+  if (v.kind === "closed" && keys === "kind,reason" && v.reason === "idle") return { kind: "closed", reason: "idle" };
+  return null;
 }
 
 export function randomId(): string {

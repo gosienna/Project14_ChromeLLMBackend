@@ -10,16 +10,20 @@ import { getKey } from "../shared/keystore";
 import {
   estimateMessageTokens,
   estimateTokens,
+  MAX_SEARCH_RESULTS,
   parsePageRequest,
   type ModelInfo,
   type PageRequest,
   type PageRequestKind,
   type PageResponse,
   type PlaygroundEnvelope,
+  type PortNotice,
 } from "../shared/protocol";
 import {
   appendUsage,
   defaultSite,
+  effectiveMaxContext,
+  effectiveMaxOutput,
   findProvider,
   getSettings,
   getSite,
@@ -30,9 +34,12 @@ import {
   type SiteConfig,
   type UsageEntry,
 } from "../shared/settings";
+import { googlePermitted, googleSearch } from "./google-search";
+import { runSearch, type SearchDeps } from "./search";
+import type { SearchResult, TavilyOutcome } from "../shared/search";
 import { askConsent, clearOnceGrants, getConsentRequest, hasOnceGrant, onWindowClosed, settle, type Decision } from "./consent";
 import { hostReady, onHostDisconnect, onHostMessage, sendToHost } from "./host-link";
-import { TokenRateLimiter, exceedsDailyTokenCap, providerTokensThisMonth, siteTokensToday } from "./limits";
+import { TokenRateLimiter, exceedsDailyTokenCap, idleCloseIn, providerTokensThisMonth, siteTokensToday } from "./limits";
 import { configuredLocalModel, listModels, parseModelId } from "./models";
 import { consentAvailability, deliversTo, gate } from "./policy";
 import { isPermitted, syncRegistrations } from "./registration";
@@ -46,7 +53,19 @@ interface PageConn {
   port: chrome.runtime.Port;
   origin: string;
   tabId: number;
+  /** Last message in either direction, for the idle close. */
+  lastActivity: number;
+  /** Set on web page ports only; the playground is never closed for idling. */
+  idleTimer?: ReturnType<typeof setTimeout>;
 }
+
+/**
+ * Chrome stops a service worker after 30s without events, and a page's port to it then goes
+ * dead without telling the page. The router closes an idle page port first, with a notice, so
+ * the bridge knows to reconnect (waking the worker) on its next request.
+ */
+const IDLE_CLOSE_MS = 25_000;
+let idleCloseMs = IDLE_CLOSE_MS;
 
 interface InFlight {
   conn: PageConn;
@@ -63,13 +82,17 @@ const sessionBackends = new Map<string, string>();
 /** Sessions whose page opted in to reasoning with create({ reasoning: true }). */
 const reasoningSessions = new Set<string>();
 const limiter = new TokenRateLimiter();
+/** Searches per origin per minute; each one opens a Google window or spends a Tavily credit. */
+const SEARCHES_PER_MINUTE = 10;
+const searchLimiter = new TokenRateLimiter();
 let connCounter = 0;
 // Unique across worker restarts, since the host outlives the worker.
 const bootId = Date.now().toString(36);
 
 const rid = (conn: PageConn, id: string) => `${conn.key}.${id}`;
 
-function reply(conn: PageConn, res: PageResponse) {
+function reply(conn: PageConn, res: PageResponse | PortNotice) {
+  conn.lastActivity = Date.now();
   try {
     conn.port.postMessage(res);
   } catch {
@@ -81,15 +104,36 @@ function replyError(conn: PageConn, id: string, e: unknown) {
   reply(conn, { kind: "error", id, ...toWireError(e) });
 }
 
-function openConn(port: chrome.runtime.Port, origin: string, tabId: number, onMessage: (conn: PageConn, raw: unknown) => void) {
-  const conn: PageConn = { key: `c${bootId}${++connCounter}`, port, origin, tabId };
+function openConn(port: chrome.runtime.Port, origin: string, tabId: number, onMessage: (conn: PageConn, raw: unknown) => void): PageConn {
+  const conn: PageConn = { key: `c${bootId}${++connCounter}`, port, origin, tabId, lastActivity: Date.now() };
   conns.set(conn.key, conn);
-  port.onMessage.addListener((raw) => onMessage(conn, raw));
-  port.onDisconnect.addListener(() => {
-    conns.delete(conn.key);
-    for (const [k, f] of inFlight) if (f.conn === conn) inFlight.delete(k);
-    sendToHost({ type: "admin", rid: `release-${conn.key}`, admin: { op: "releaseOwner", owner: conn.key } }).catch(() => {});
+  port.onMessage.addListener((raw) => {
+    conn.lastActivity = Date.now();
+    onMessage(conn, raw);
   });
+  port.onDisconnect.addListener(() => dropConn(conn));
+  return conn;
+}
+
+/** Forget a closed port and release its sessions. Runs once, whichever side closed it. */
+function dropConn(conn: PageConn) {
+  if (!conns.delete(conn.key)) return;
+  clearTimeout(conn.idleTimer);
+  for (const [k, f] of inFlight) if (f.conn === conn) inFlight.delete(k);
+  sendToHost({ type: "admin", rid: `release-${conn.key}`, admin: { op: "releaseOwner", owner: conn.key } }).catch(() => {});
+}
+
+function watchIdle(conn: PageConn, wait = idleCloseMs) {
+  conn.idleTimer = setTimeout(() => {
+    if (!conns.has(conn.key)) return;
+    const busy = [...inFlight.values()].some((f) => f.conn === conn);
+    const next = idleCloseIn(conn.lastActivity, Date.now(), busy, idleCloseMs);
+    if (next !== "close") return watchIdle(conn, next);
+    reply(conn, { kind: "closed", reason: "idle" });
+    // disconnect() does not fire this side's onDisconnect.
+    conn.port.disconnect();
+    dropConn(conn);
+  }, wait);
 }
 
 const PLAYGROUND_URL = chrome.runtime.getURL("ui/playground.html");
@@ -104,12 +148,14 @@ chrome.runtime.onConnect.addListener((port) => {
       port.disconnect();
       return;
     }
-    openConn(port, sender.origin, sender.tab.id, (conn, raw) => {
+    const conn = openConn(port, sender.origin, sender.tab.id, (conn, raw) => {
       const env = raw as BridgeEnvelope;
       const req = parsePageRequest(env?.req);
       if (!req) return; // schema check again at the boundary
       handlePageRequest(conn, req, env.visible === true).catch((e) => replyError(conn, req.id, e));
     });
+    reply(conn, { kind: "connected" });
+    watchIdle(conn);
   } else if (port.name === "llm-playground") {
     // The extension's own playground tab only; content scripts report the page's URL and origin.
     if (sender?.id !== chrome.runtime.id || !sender.url?.startsWith(PLAYGROUND_URL) || !sender.tab?.id) {
@@ -204,7 +250,7 @@ const hostBase = (conn: PageConn, settings: Settings) => ({
   type: "req" as const,
   origin: conn.origin,
   owner: conn.key,
-  limits: { maxSessions: settings.limits.maxSessions, maxContext: settings.limits.maxContext, maxOutputTokens: settings.limits.maxOutputTokens },
+  limits: { maxSessions: settings.limits.maxSessions, maxContext: effectiveMaxContext(settings.limits), maxOutputTokens: effectiveMaxOutput(settings.limits) },
   idleUnloadMinutes: settings.idleUnloadMinutes,
 });
 
@@ -288,6 +334,14 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
         if (decision === "deny") throw new LLMError("NotAllowedError", "The user denied access to the model");
       }
       return forward(conn, { ...req, options }, { ...base, backends }, reasoning === true);
+    }
+
+    case "search": {
+      if (!searchLimiter.allows(origin, 1, SEARCHES_PER_MINUTE)) {
+        throw new LLMError("QuotaExceededError", "Per-minute web search limit for this site reached; try again shortly");
+      }
+      searchLimiter.record(origin, 1);
+      return reply(conn, { kind: "result", id: req.id, value: await search(req.query, req.maxResults) });
     }
 
     case "prompt":
@@ -427,6 +481,7 @@ async function revokeSite(origin: string, removePermission: boolean): Promise<vo
   await updateSite(origin, () => null);
   await clearOnceGrants((o) => o === origin);
   limiter.forget(origin);
+  searchLimiter.forget(origin);
   for (const c of conns.values()) if (c.origin === origin) c.port.disconnect();
   await admin({ op: "revokeOrigin", origin }).catch(() => {});
   if (removePermission) await chrome.permissions.remove({ origins: [originPattern(origin)] }).catch(() => {});
@@ -485,18 +540,22 @@ chrome.runtime.onMessage.addListener((msg: UIMessage, sender, sendResponse) => {
   }
 });
 
-/** The playground's web_search tool: the key is read here and sent only to the host, which calls Tavily. */
+/** The playground's web_search tool. Same search as localLLM.search(), without the site gate. */
 async function webSearch(args: { query?: unknown; max_results?: unknown }) {
-  const query = String(args?.query ?? "").trim();
-  if (!query) throw new Error("web_search requires a non-empty query");
-  const apiKey = await getKey("tavily");
-  if (!apiKey) throw new Error("No Tavily API key — add one in the extension's options under Tools");
-  if (!(await chrome.permissions.contains({ origins: ["https://api.tavily.com/*"] }))) {
-    throw new Error("Permission to reach api.tavily.com has not been granted (options → Tools)");
-  }
-  const maxResults = Math.min(10, Math.max(1, Number(args?.max_results) || 5));
-  return admin({ op: "webSearch", apiKey, query, maxResults });
+  const maxResults = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Math.floor(Number(args?.max_results)) || 5));
+  return search(String(args?.query ?? ""), maxResults);
 }
+
+/** Tavily keys are read here and sent only to the host; Google runs in this worker. */
+const searchDeps: SearchDeps = {
+  tavilyKey: () => getKey("tavily"),
+  tavilyPermitted: () => chrome.permissions.contains({ origins: ["https://api.tavily.com/*"] }),
+  tavily: async (apiKey, query, maxResults) => (await admin({ op: "webSearch", apiKey, query, maxResults })) as TavilyOutcome,
+  googlePermitted,
+  google: googleSearch,
+};
+
+const search = (query: string, maxResults: number) => runSearch(query, maxResults, searchDeps);
 
 // ---- Lifecycle ------------------------------------------------------------
 
@@ -530,5 +589,13 @@ if (__TEST__) {
     revokeSite: (origin: string) => revokeSite(origin, false),
     getUsage,
     admin,
+    /** Applies to page ports opened from now on. */
+    setIdleCloseMs: (ms: number) => (idleCloseMs = ms),
+    /** Replace the Google runner and skip Tavily, so e2e never reaches the network. */
+    setSearchStub(results: SearchResult[]) {
+      searchDeps.tavilyKey = async () => null;
+      searchDeps.googlePermitted = async () => true;
+      searchDeps.google = async (_q, n) => results.slice(0, n);
+    },
   };
 }

@@ -5,6 +5,10 @@
 //   const lm = await getLanguageModel();
 //   if (lm) { const s = await lm.LanguageModel.create(); console.log(await s.prompt("Hi")); }
 //   else { /* call your server instead */ }
+//
+// With web search (the user allows it per site in the extension's options):
+//   const tool = lm && webSearchTool(lm);
+//   const s = await lm.LanguageModel.create({ tools: tool ? [tool] : [] });
 
 export type Availability = "unavailable" | "downloadable" | "downloading" | "available";
 export type Source = "native" | "extension";
@@ -58,6 +62,35 @@ export interface ModelInfo {
   legacy?: boolean;
 }
 
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+  score: number | null;
+}
+
+/** localLLM.search() result: from Tavily, or from a Google results page when Tavily isn't usable. */
+export interface SearchResponse {
+  query: string;
+  provider: "tavily" | "google";
+  results: SearchResult[];
+  /** Why the Google fallback was used. */
+  note?: string;
+}
+
+export interface SearchOptions {
+  maxResults?: number;
+  signal?: AbortSignal;
+}
+
+/** A page-declared tool for LanguageModel.create({ tools }); execute() runs in the page. */
+export interface ToolDeclaration {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  execute(args: Record<string, unknown>): Promise<string>;
+}
+
 export interface Found {
   LanguageModel: LanguageModelStatic;
   source: Source;
@@ -65,9 +98,17 @@ export interface Found {
   info(): Promise<ExtensionInfo | null>;
   /** Models the site can run now; empty with Chrome's native API, which has one model. */
   models(): Promise<ModelInfo[]>;
+  /**
+   * Web search through the extension, when the user allowed it for this site. Null with
+   * Chrome's native API or an extension version without search.
+   */
+  search: ((query: string, options?: SearchOptions) => Promise<SearchResponse>) | null;
 }
 
-type Win = { LanguageModel?: LanguageModelStatic; localLLM?: { info(): Promise<ExtensionInfo>; models?(): Promise<ModelInfo[]> } };
+type Win = {
+  LanguageModel?: LanguageModelStatic;
+  localLLM?: { info(): Promise<ExtensionInfo>; models?(): Promise<ModelInfo[]>; search?(query: string, options?: SearchOptions): Promise<SearchResponse> };
+};
 
 const win = (): Win | undefined => (typeof window === "undefined" ? undefined : (window as unknown as Win));
 
@@ -82,6 +123,29 @@ function current(): Found | null {
     source: ext ? "extension" : "native",
     info: async () => (ext ? ext.info() : null),
     models: async () => (ext?.models ? ext.models() : []),
+    search: ext?.search ? (query, options) => ext.search!(query, options) : null,
+  };
+}
+
+/**
+ * A web_search tool backed by `found.search`, for LanguageModel.create({ tools }). The model
+ * calls it during prompt(); results come back as JSON with title, url and snippet.
+ */
+export function webSearchTool(found: Found, { name = "web_search", maxResults = 5 }: { name?: string; maxResults?: number } = {}): ToolDeclaration | null {
+  const search = found.search;
+  if (!search) return null;
+  return {
+    name,
+    description: "Search the web. Returns a JSON list of results with title, url and snippet. Use it for current events or facts you are unsure of, and cite the urls you use.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query" },
+        max_results: { type: "integer", minimum: 1, maximum: 10, description: `How many results (default ${maxResults})` },
+      },
+      required: ["query"],
+    },
+    execute: async (args) => JSON.stringify(await search(String(args.query ?? ""), { maxResults: Number(args.max_results) || maxResults })),
   };
 }
 

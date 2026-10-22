@@ -1,7 +1,8 @@
 // IndexedDB store for downloaded model files, used by the Transformers.js and wllama engines
 // (WebLLM has its own IndexedDB cache). Files are written as ~64 MB Blob chunks so multi-GB
 // downloads never sit in memory; a read returns one Blob over the chunks, which Chrome keeps on
-// disk and wllama slices on demand.
+// disk and wllama slices on demand. Chunks are walked with a cursor: getAll() fails once the
+// stored file is multiple GiB, which is what a 27B GGUF is.
 
 const DB_NAME = "local-llm-models";
 const CHUNK_BYTES = 64 * 2 ** 20;
@@ -58,11 +59,25 @@ export class ModelStore {
   /** The whole file, or null if it is absent or was only partly written. */
   async read(key: string): Promise<Blob | null> {
     const db = await open();
+    const full = this.k(key);
     const tx = db.transaction(["files", "chunks"], "readonly");
-    const [file, chunks] = await Promise.all([
-      result(tx.objectStore("files").get(this.k(key))) as Promise<FileRecord | undefined>,
-      result(tx.objectStore("chunks").getAll(chunkRange(this.k(key)))) as Promise<Blob[]>,
-    ]);
+    const fileReq = result(tx.objectStore("files").get(full)) as Promise<FileRecord | undefined>;
+    const chunks: Blob[] = [];
+    // Both requests start before the first await, or IndexedDB commits the transaction.
+    const cursorReq = tx.objectStore("chunks").openCursor(chunkRange(full));
+    const cursorDone = new Promise<void>((resolve, reject) => {
+      cursorReq.onerror = () => reject(cursorReq.error);
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        chunks.push(cursor.value as Blob);
+        cursor.continue();
+      };
+    });
+    const [file] = await Promise.all([fileReq, cursorDone]);
     if (!file || chunks.length !== file.chunks) return null;
     return new Blob(chunks);
   }

@@ -8,6 +8,7 @@ import { deleteKey, disableLock, enableLock, keystoreStatus, lock, setKey, unloc
 import { BUILTIN_PROVIDERS, customProvider } from "../shared/providers";
 import {
   allProviders,
+  effectiveMaxContext,
   getSettings,
   getSites,
   getUsage,
@@ -106,11 +107,15 @@ async function sitesSection(): Promise<HTMLElement> {
       type: "checkbox", checked: site.allowFallback,
       onchange: async (e) => updateSite(site.origin, (s: SiteConfig) => ({ ...s, allowFallback: (e.target as HTMLInputElement).checked })),
     }), "Fall back to other allowed backends");
+    const webSearch = h("label", { class: "small", title: "localLLM.search(): Tavily with your key, or a Google results page in a minimized window" }, h("input", {
+      type: "checkbox", checked: !!site.webSearch,
+      onchange: async (e) => updateSite(site.origin, (s: SiteConfig) => ({ ...s, webSearch: (e.target as HTMLInputElement).checked })),
+    }), "Allow web search");
 
     return h("tr", {},
       h("td", {}, h("code", {}, site.origin)),
       h("td", {}, consent),
-      h("td", {}, backendSel, allowed, fallback),
+      h("td", {}, backendSel, allowed, fallback, h("div", {}, webSearch)),
       h("td", {}, h("div", { class: "row" }, cap, unlimited)),
       h("td", {},
         h("div", { class: "row" },
@@ -210,7 +215,7 @@ async function localSection(): Promise<HTMLElement> {
     };
     chrome.runtime.onMessage.addListener(listener);
     try {
-      await send({ type: "admin", admin: { op: "download", model, engine: pin, maxContext: settings.limits.maxContext } });
+      await send({ type: "admin", admin: { op: "download", model, engine: pin, maxContext: effectiveMaxContext(settings.limits) } });
       toast(msg, "Model ready");
     } catch (e) {
       toast(msg, String((e as Error).message));
@@ -393,6 +398,7 @@ async function cloudSection(): Promise<HTMLElement> {
 // ---- Playground tools ----------------------------------------------------------
 
 const TAVILY = "https://api.tavily.com/*";
+const GOOGLE = "https://www.google.com/*";
 
 async function toolsSection(): Promise<HTMLElement> {
   const ks = await keystoreStatus();
@@ -400,10 +406,12 @@ async function toolsSection(): Promise<HTMLElement> {
   const granted = await chrome.permissions.contains({ origins: [TAVILY] });
   const keyInput = h("input", { type: "password", placeholder: saved ? "•••••••• (saved)" : "Tavily API key", size: 26, autocomplete: "off" });
   const msg = h("span", { class: "small muted" });
+  const googleGranted = await chrome.permissions.contains({ origins: [GOOGLE] });
+  const googleMsg = h("span", { class: "small muted" }, googleGranted ? "Granted" : "");
   return section("tools", "Playground tools",
     h("p", { class: "small muted" },
       "The playground can give models the extension's own tools: browser automation, web search, and tools you write. Turn them on in the playground's Tools panel. ",
-      "These tools are never available to websites."),
+      "These tools are never available to websites, except web search for sites where you tick \u201cAllow web search\u201d under Sites."),
     h("h2", { style: "margin-top:12px" }, "Web search (Tavily)"),
     h("p", { class: "small muted" }, "The web_search tool uses your Tavily key. It's stored with your other keys and sent only to api.tavily.com."),
     h("div", { class: "row" }, keyInput,
@@ -419,6 +427,19 @@ async function toolsSection(): Promise<HTMLElement> {
       saved ? h("button", { class: "danger", onclick: async () => { await deleteKey("tavily"); render(); } }, "Delete") : null,
       msg),
     saved && !granted ? h("p", { class: "small warn-text" }, "Saved, but access to api.tavily.com isn't granted yet; save the key again to grant it.") : null,
+    h("h2", { style: "margin-top:12px" }, "Google search fallback"),
+    h("p", { class: "small muted" },
+      "When there's no Tavily key, or Tavily is out of credits or rejects the key, web search opens a Google results page in a minimized window, ",
+      "reads the results and closes it. This needs access to www.google.com."),
+    h("div", { class: "row" },
+      googleGranted
+        ? h("button", { onclick: async () => { await chrome.permissions.remove({ origins: [GOOGLE] }); render(); } }, "Remove access")
+        : h("button", { onclick: async () => {
+            // Ask for www.google.com while handling this click.
+            if (!(await chrome.permissions.request({ origins: [GOOGLE] }))) return toast(googleMsg, "Not granted");
+            render();
+          } }, "Grant access to google.com"),
+      googleMsg),
   );
 }
 
@@ -449,12 +470,45 @@ async function lockPanel(ks: Awaited<ReturnType<typeof keystoreStatus>>): Promis
 function limitsSection(): HTMLElement {
   const num = (label: string, value: number, set: (s: Settings, v: number) => void) =>
     h("label", {}, label, h("input", { type: "number", min: 1, value, onchange: (e) => save((s) => set(s, Number((e.target as HTMLInputElement).value))) }));
+  const capped = (label: string, value: number, unlimited: boolean, title: string, setValue: (s: Settings, v: number) => void, setUnlimited: (s: Settings, on: boolean) => void) => {
+    const input = h("input", {
+      type: "number",
+      min: 1,
+      value,
+      disabled: unlimited,
+      onchange: (e) => save((s) => setValue(s, Number((e.target as HTMLInputElement).value))),
+    });
+    const box = h("label", { class: "small", title }, h("input", {
+      type: "checkbox",
+      checked: unlimited,
+      onchange: (e) => {
+        const on = (e.target as HTMLInputElement).checked;
+        input.disabled = on;
+        return save((s) => setUnlimited(s, on));
+      },
+    }), "Unlimited");
+    return [h("label", {}, `${label} `, input), box] as const;
+  };
   return section("limits", "Limits and compatibility",
     h("div", { class: "row" },
       num("Concurrent sessions per site", settings.limits.maxSessions, (s, v) => (s.limits.maxSessions = v)),
       num("Tokens per minute per site", settings.limits.tokensPerMinute, (s, v) => (s.limits.tokensPerMinute = v)),
-      num("Max context tokens", settings.limits.maxContext, (s, v) => (s.limits.maxContext = v)),
-      num("Max output tokens", settings.limits.maxOutputTokens, (s, v) => (s.limits.maxOutputTokens = v))),
+      ...capped(
+        "Max context tokens",
+        settings.limits.maxContext,
+        !!settings.limits.maxContextUnlimited,
+        "Use each model's own context window",
+        (s, v) => (s.limits.maxContext = v),
+        (s, on) => (s.limits.maxContextUnlimited = on),
+      ),
+      ...capped(
+        "Max output tokens",
+        settings.limits.maxOutputTokens,
+        !!settings.limits.maxOutputUnlimited,
+        "Let a reply use whatever context is still free",
+        (s, v) => (s.limits.maxOutputTokens = v),
+        (s, on) => (s.limits.maxOutputUnlimited = on),
+      )),
     h("div", { class: "row", style: "margin-top:12px" }, h("label", {}, h("input", {
       type: "checkbox", checked: settings.overrideNative,
       onchange: (e) => save((s) => (s.overrideNative = (e.target as HTMLInputElement).checked)),

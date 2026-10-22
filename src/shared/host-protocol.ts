@@ -47,7 +47,7 @@ export type AdminOp =
   | { op: "releaseOwner"; owner: string }
   /** Abort every in-flight request, or only one origin's. Resolves to the number aborted. */
   | { op: "stop"; origin?: string }
-  /** The playground's web_search tool. The router adds the key; the page never sees it. */
+  /** Web search through Tavily; resolves to a TavilyOutcome. The router adds the key; the page never sees it. */
   | { op: "webSearch"; apiKey: string; query: string; maxResults: number };
 
 export interface HostStatus {

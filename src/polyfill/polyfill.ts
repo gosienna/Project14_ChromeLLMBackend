@@ -2,7 +2,8 @@
 // It holds no model: only request ids and promise/stream bookkeeping. Requests travel to the
 // isolated-world relay (bridge.ts) over a MessageChannel set up with a per-page nonce.
 
-import { MAX_TOOLS, TOOL_NAME, type ChatMessage, type DistributiveOmit, type ModelInfo, type ModelParams, type PageRequest, type PageResponse, type SessionInfo, type SessionOptions, type ToolDecl } from "../shared/protocol";
+import { MAX_SEARCH_RESULTS, MAX_TOOLS, TOOL_NAME, type ChatMessage, type DistributiveOmit, type ModelInfo, type ModelParams, type PageRequest, type PageResponse, type SessionInfo, type SessionOptions, type ToolDecl } from "../shared/protocol";
+import type { SearchResponse } from "../shared/search";
 
 declare const __OVERRIDE_NATIVE__: boolean;
 declare const __VERSION__: string;
@@ -50,6 +51,12 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
       return;
     }
     if (this !== port) return;
+    if (data.kind === ("closed" as string)) {
+      // The extension closed the connection (idle, or it went away); the next call reopens it.
+      const reason = (data as { reason?: unknown }).reason;
+      window.dispatchEvent(new CustomEvent("localllm:closed", { detail: { reason: typeof reason === "string" ? reason : "disconnected" } }));
+      return;
+    }
     const p = pending.get(data.id);
     if (!p) return;
     switch (data.kind) {
@@ -365,12 +372,47 @@ type ToolFn = (args: Record<string, unknown>) => unknown;
 
   Object.defineProperty(window, "LanguageModel", { value: LanguageModel, writable: true, configurable: true });
 
+  function search(query: string, options: { maxResults?: number; signal?: AbortSignal } = {}): Promise<SearchResponse> {
+    if (typeof query !== "string" || !query.trim()) return Promise.reject(new TypeError("search() needs a non-empty query"));
+    const n = Math.floor(Number(options.maxResults ?? 5));
+    const maxResults = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Number.isFinite(n) ? n : 5));
+    return request<SearchResponse>({ kind: "search", query: query.slice(0, 500), maxResults }, {}, options.signal);
+  }
+
+  /**
+   * A tool declaration for LanguageModel.create({ tools }). It is the page's own tool: execute()
+   * runs here and calls search(), so the model's tool loop needs nothing new.
+   */
+  function webSearchTool(options: { name?: string; maxResults?: number } = {}): ToolOption {
+    return {
+      name: options.name ?? "web_search",
+      description: "Search the web. Returns a JSON list of results with title, url and snippet. Use it for current events or facts you are unsure of, and cite the urls you use.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query" },
+          max_results: { type: "integer", minimum: 1, maximum: MAX_SEARCH_RESULTS, description: "How many results (default 5)" },
+        },
+        required: ["query"],
+      },
+      execute: async (args) => {
+        const max = Number(args.max_results) || options.maxResults || 5;
+        return JSON.stringify(await search(String(args.query ?? ""), { maxResults: max }));
+      },
+    };
+  }
+
   const localLLM = Object.freeze({
     version: __VERSION__,
     overridesNative: hasNative,
     info: () => request<{ name: string; backend: string; images: boolean; tools: "native" | "prompted"; version: string }>({ kind: "info" }),
     /** Models this site can run now; pass an id to LanguageModel.create({ model }). */
     models: () => request<ModelInfo[]>({ kind: "models" }),
+    /** Features this extension version offers pages. */
+    capabilities: Object.freeze({ search: true }),
+    /** Web search, if the user turned it on for this site: Tavily, or a Google results page as fallback. */
+    search,
+    webSearchTool,
   });
   Object.defineProperty(window, "localLLM", { value: localLLM, writable: false, configurable: true });
   window.dispatchEvent(new Event("localllm:ready"));

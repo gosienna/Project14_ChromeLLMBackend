@@ -75,6 +75,21 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - First user: LearnWithLLM's Debug mode
 - Tests: protocol field, `deliversTo`; E2E plain vs opted-in vs clone with the echo engine's `/think`. Not yet verified with real reasoning models
 
+## Idle close of page connections — done (echo engine)
+
+- Chrome stops the worker after 30s idle and the page's port then goes dead silently. The router now closes a page port after 25s with no message either way and nothing in flight (`IDLE_CLOSE_MS`, `idleCloseIn` in `limits.ts`), sending a `closed` notice first; the port's sessions are released. Every new page port gets a `connected` notice (`PortNotice`, `parsePortNotice`)
+- The bridge fails the closed port's requests, posts `closed` to the page and reconnects on the next request; a new port without `connected` in 5s is given up as `unresponsive`. The stub fires `localllm:closed` with `detail.reason`
+- First user: LearnWithLLM's status line
+- Tests: `idleCloseIn`, `parsePortNotice`; E2E idle close + reconnect with a shortened period (`__test.setIdleCloseMs`)
+
+## Web search for pages, Google fallback — done (stubbed provider)
+
+- `background/search.ts` `runSearch`: Tavily when a key and permission exist, else (or on 401/403/429/432/433/5xx/network) the Google fallback; 400/422 are reported. The host's `webSearch` op now resolves to `TavilyOutcome` with the status instead of throwing
+- `background/google-search.ts`: results page in a minimized, unfocused window, one search at a time, 15s load timeout, read with `collectGoogleResults` and cleaned by `normalizeGoogleResults` (`shared/search.ts`); verification/consent pages give `NetworkError`. Optional host permission `https://www.google.com/*`, granted in options → Tools
+- Page API: `search` request kind; `localLLM.search()`, `localLLM.webSearchTool()`, `localLLM.capabilities`. Gate: model consent plus `SiteConfig.webSearch` (options → Sites, off by default); 10 searches/min per origin. The playground's `web_search` uses the same search. `@local-llm/web`: `found.search`, `webSearchTool(found)`
+- First user: LearnWithLLM's web search toggle
+- Tests: protocol, gate, `runSearch` provider choice, `tavilyFallback`, `normalizeGoogleResults`, web package; E2E with `__test.setSearchStub`. Not yet verified: real Google results page markup, real Tavily quota responses
+
 ## Not started / v2
 
 - Structured output (`responseConstraint`), embeddings

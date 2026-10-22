@@ -36,6 +36,20 @@ describe("gate", () => {
   });
 });
 
+describe("gate: search", () => {
+  const withSearch = (consent?: "always" | "deny") => ({ ...site(consent), webSearch: true });
+  it("needs the site's web search switch", () => {
+    expect(gate({ ...base, kind: "search", site: site("always") }).action).toBe("deny");
+    expect(gate({ ...base, kind: "search", site: withSearch("always") }).action).toBe("allow");
+  });
+  it("still needs model consent and never prompts", () => {
+    expect(gate({ ...base, kind: "search", site: withSearch() }).action).toBe("deny");
+    expect(gate({ ...base, kind: "search", site: withSearch(), onceGrant: true }).action).toBe("allow");
+    expect(gate({ ...base, kind: "search", site: withSearch("deny") }).action).toBe("deny");
+    expect(gate({ ...base, kind: "search", site: withSearch("always"), permitted: false }).action).toBe("deny");
+  });
+});
+
 describe("consentAvailability", () => {
   it("reports consent state before asking the backend", () => {
     expect(consentAvailability(site(), true, false)).toBe("downloadable");

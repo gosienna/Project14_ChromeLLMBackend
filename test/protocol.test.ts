@@ -5,6 +5,7 @@ import {
   estimateMessageTokens,
   parsePageRequest,
   parsePageResponse,
+  parsePortNotice,
   type ImageInput,
 } from "../src/shared/protocol";
 
@@ -52,6 +53,20 @@ describe("parsePageRequest", () => {
   });
 });
 
+describe("search request", () => {
+  const ok = { kind: "search", id: "r1", query: "weather", maxResults: 5 };
+  it("accepts a query and result count", () => expect(parsePageRequest(ok)).toEqual(ok));
+  it("rejects empty, long or extra input", () => {
+    expect(parsePageRequest({ ...ok, query: "  " })).toBeNull();
+    expect(parsePageRequest({ ...ok, query: "x".repeat(501) })).toBeNull();
+    expect(parsePageRequest({ ...ok, maxResults: 0 })).toBeNull();
+    expect(parsePageRequest({ ...ok, maxResults: 11 })).toBeNull();
+    expect(parsePageRequest({ ...ok, maxResults: 2.5 })).toBeNull();
+    expect(parsePageRequest({ ...ok, provider: "google" })).toBeNull();
+    expect(parsePageRequest({ kind: "search", id: "r1", query: "q" })).toBeNull();
+  });
+});
+
 describe("image input", () => {
   const img = { mimeType: "image/png", data: "iVBORw0KGgo=" };
   const prompt = (input: unknown) => ({ kind: "prompt", id: "r1", sessionId: "s1", input, stream: true });
@@ -88,5 +103,15 @@ describe("parsePageResponse", () => {
     expect(parsePageResponse({ kind: "reasoning", id: "r1", text: "hm" })).toBeTruthy();
     expect(parsePageResponse({ kind: "error", id: "r1", name: "AbortError", message: "x" })).toBeTruthy();
     expect(parsePageResponse({ kind: "bogus", id: "r1" })).toBeNull();
+  });
+});
+
+describe("parsePortNotice", () => {
+  it("accepts only the two notices, with no extra fields", () => {
+    expect(parsePortNotice({ kind: "connected" })).toEqual({ kind: "connected" });
+    expect(parsePortNotice({ kind: "closed", reason: "idle" })).toEqual({ kind: "closed", reason: "idle" });
+    expect(parsePortNotice({ kind: "closed", reason: "other" })).toBeNull();
+    expect(parsePortNotice({ kind: "connected", id: "r1" })).toBeNull();
+    expect(parsePortNotice({ kind: "chunk", id: "r1", text: "a" })).toBeNull();
   });
 });

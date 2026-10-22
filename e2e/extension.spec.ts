@@ -190,3 +190,25 @@ test("revocation takes effect immediately", async ({ context, sw }) => {
   await page.reload();
   expect(await page.evaluate(() => "LanguageModel" in window)).toBe(false);
 });
+
+test("an idle page connection closes with a notice and the next call reconnects", async ({ context, sw }) => {
+  await enable(sw, "always");
+  await sw.evaluate(() => (globalThis as any).__test.setIdleCloseMs(1500));
+  const page = await context.newPage();
+  await page.goto(PAGE);
+
+  const result = await page.evaluate(async () => {
+    const LM = (window as any).LanguageModel;
+    const closed = new Promise<string>((resolve) =>
+      window.addEventListener("localllm:closed", (e) => resolve((e as CustomEvent).detail.reason), { once: true }),
+    );
+    const before = await (await LM.create()).prompt("before");
+    const reason = await closed;
+    const after = await (await LM.create()).prompt("after");
+    return { before, reason, after };
+  });
+
+  expect(result.before).toContain("before");
+  expect(result.reason).toBe("idle");
+  expect(result.after).toContain("after");
+});

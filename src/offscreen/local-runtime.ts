@@ -3,6 +3,7 @@
 
 import { ALL_CAPS, canRun, contextLimit, resolveEngine, takesImages, toolMode, type CatalogModel, type DeviceCaps, type EngineId } from "../shared/catalog";
 import type { Availability, ChatMessage, ModelParams } from "../shared/protocol";
+import { receivedCap } from "../shared/settings";
 import { DEFAULT_PARAMS, type Backend, type GenerateOptions, type GenerateResult } from "./backend";
 import { DummyEngine } from "./engines/dummy";
 import { NanoEngine, nanoSupported } from "./engines/nano";
@@ -116,10 +117,10 @@ export class LocalRuntime {
     return "downloadable";
   }
 
-  /** Context a load would allocate: the user's limit, capped to what the model and build allow. */
+  /** Context a load would allocate. A cap at or above the model's window means that window. */
   contextSize(model: CatalogModel, pin: EngineId | "auto", maxContext: number): number {
     const engine = this.resolveEngine(model, pin);
-    return Math.min(maxContext, engine ? contextLimit(model, engine) : model.contextWindow);
+    return Math.min(receivedCap(maxContext), engine ? contextLimit(model, engine) : model.contextWindow);
   }
 
   /**
@@ -257,7 +258,7 @@ export class LocalBackend implements Backend {
     readonly model: CatalogModel,
     private pin: EngineId | "auto",
     private idleMinutes: number,
-    /** The user's "Max context tokens"; the model loads with this, capped to its own limit. */
+    /** The user's "Max context tokens". At or above the model's window, the model uses its own. */
     private maxContext: number,
     /** Let reasoning models think; off asks them to skip or shorten it. */
     private reasoning = true,

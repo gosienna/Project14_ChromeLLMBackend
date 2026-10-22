@@ -21,7 +21,8 @@
     "https://openrouter.ai/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
-    "https://api.tavily.com/*"
+    "https://api.tavily.com/*",
+    "https://www.google.com/*"
   ],
   "action": {
     "default_title": "Local LLM",
