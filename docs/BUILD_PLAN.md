@@ -152,13 +152,13 @@ Phase 1 proves the relay chain with a dummy engine before any model work; most o
 
 Design for a standard review from day one: no broad required host permissions, all code bundled, plain disclosures. Broad host patterns like `<all_urls>` are a documented cause of longer reviews ([Chrome Web Store review process](https://developer.chrome.com/docs/webstore/review-process)).
 
-- [ ] Host access only through `optional_host_permissions`; required `host_permissions` empty
-- [ ] Bundle Transformers.js, WebLLM (including per-model libraries), wllama, ONNX Runtime Web `.wasm` files and all JS; set `env.backends.onnx.wasm.wasmPaths` to local paths so nothing loads from a CDN
-- [ ] Model weights fetched at runtime are data, not code; document the download hosts
-- [ ] Single-purpose statement: "Provides an on-device language model to websites the user approves"
-- [ ] Justification text for `offscreen`, `scripting`, `storage`, `unlimitedStorage`
-- [ ] Privacy policy and data-use certification: no prompts or outputs collected; cloud backend sends data only to the provider the user configures
-- [ ] Readable, non-obfuscated build output
+- [x] Host access only through `optional_host_permissions`; required `host_permissions` empty
+- [x] Bundle Transformers.js, WebLLM (including per-model libraries), wllama, ONNX Runtime Web `.wasm` files and all JS; set `env.backends.onnx.wasm.wasmPaths` to local paths so nothing loads from a CDN
+- [x] Model weights fetched at runtime are data, not code; document the download hosts
+- [x] Single-purpose statement: "Provides an on-device language model to websites the user approves"
+- [x] Justification text for `offscreen`, `scripting`, `storage`, `unlimitedStorage`
+- [x] Privacy policy and data-use certification: no prompts or outputs collected; cloud backend sends data only to the provider the user configures
+- [x] Readable, non-obfuscated build output
 - [ ] Never add new required permissions in updates; that disables the extension for existing users until they re-approve
 
 ## Testing strategy

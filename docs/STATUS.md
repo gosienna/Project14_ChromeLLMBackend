@@ -97,6 +97,13 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - `capabilities.imageSearch`; the `search` page request now requires `includeImages: boolean`
 - Tests: `runSearch` image flag and Images-tab failure, `normalizeGoogleImages`, protocol, web package; E2E with images in the stub. Not yet verified: real Google Images markup, real Tavily image responses
 
+## Chrome Web Store submission — materials ready, not submitted
+
+- `docs/STORE.md`: packaging steps, listing text, single purpose, justifications for every permission (optional ones included), remote-code and data-usage answers, review risks
+- `docs/PRIVACY.md`: privacy policy; needs a public URL before submitting
+- `docs/store/options.png`: first 1280×800 screenshot. Still to do: real-chat and consent screenshots, 440×280 promo tile
+- Main review risk: playground tools that run model-written code (`execute_script`, `create_tool`/`update_tool`)
+
 ## Not started / v2
 
 - Structured output (`responseConstraint`), embeddings
