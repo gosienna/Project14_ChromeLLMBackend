@@ -97,6 +97,12 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - `capabilities.imageSearch`; the `search` page request now requires `includeImages: boolean`
 - Tests: `runSearch` image flag and Images-tab failure, `normalizeGoogleImages`, protocol, web package; E2E with images in the stub. Not yet verified: real Google Images markup, real Tavily image responses
 
+## Chrome Web Store package
+
+- `debugger` is not declared. Chrome drops it from `optional_permissions`, and a required debugger permission is outside the extension's purpose. Playground console tools install a page hook with `chrome.scripting` instead.
+- `npm run pack` writes `release/local-llm-<version>.zip` (manifest at the archive root, WebLLM libraries required). Listing copy and the privacy-tab answers are in `docs/STORE.md`. The privacy policy is `docs/privacy.html`, copied into the extension as `ui/privacy.html` and linked from options.
+- Still manual: a Chrome Web Store developer account, a public URL for the privacy policy (GitHub Pages from `/docs`), and submitting the zip in the dashboard.
+
 ## Not started / v2
 
 - Structured output (`responseConstraint`), embeddings

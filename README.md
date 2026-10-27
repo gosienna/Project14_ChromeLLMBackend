@@ -564,5 +564,6 @@ See `CLAUDE.md` for the source layout and the rules each layer follows.
 | `npm run test:e2e` | Builds `dist-test/` and runs Playwright against the unpacked extension with the echo engine |
 | `npm run demo` | Serves the conformance page on http://localhost:8787 |
 | `npm run fetch:webllm-libs` | Downloads WebLLM model libraries into `vendor/webllm-libs/` for bundling |
+| `npm run pack` | Builds `dist/` and writes `release/local-llm-<version>.zip` for the Chrome Web Store. See [`docs/STORE.md`](docs/STORE.md) |
 
 Further docs: [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md), [`docs/STATUS.md`](docs/STATUS.md), [`docs/STORE.md`](docs/STORE.md) (Chrome Web Store notes).

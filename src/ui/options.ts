@@ -564,7 +564,8 @@ async function render() {
       h("p", { class: "muted" }, "Serves a language model to the websites you approve through the standard window.LanguageModel API."),
       h("nav", {},
         ...[["sites", "Sites"], ["local", "Local model"], ["cloud", "Cloud providers"], ["tools", "Tools"], ["limits", "Limits"], ["usage", "Usage"]].map(([id, t]) => h("a", { href: `#${id}` }, t)),
-        h("a", { href: "playground.html" }, "Playground →"))),
+        h("a", { href: "playground.html" }, "Playground →"),
+        h("a", { href: "privacy.html" }, "Privacy"))),
     ...parts,
   );
 }

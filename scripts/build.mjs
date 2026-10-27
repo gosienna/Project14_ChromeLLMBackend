@@ -82,6 +82,7 @@ function copyStatic() {
   cpSync(join(root, "src/icons"), join(out, "icons"), { recursive: true });
   cpSync(join(root, "src/offscreen/host.html"), join(out, "offscreen/host.html"));
   for (const page of ["options", "popup", "consent", "playground", "tool-sandbox"]) cpSync(join(root, `src/ui/${page}.html`), join(out, `ui/${page}.html`));
+  cpSync(join(root, "docs/privacy.html"), join(out, "ui/privacy.html"));
   cpSync(join(root, "src/ui/style.css"), join(out, "ui/style.css"));
   // KaTeX for math in playground replies: its stylesheet (unminified) and the woff2 fonts it uses first.
   const katex = join(root, "node_modules/katex/dist");
