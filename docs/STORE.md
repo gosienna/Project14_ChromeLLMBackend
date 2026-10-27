@@ -13,7 +13,7 @@ Chrome's current rules, used for the copy below: [publish](https://developer.chr
 
 ## 2. Privacy policy URL
 
-The policy is [`docs/privacy.html`](privacy.html). The same file is copied into the extension at `ui/privacy.html` and linked from the options page. The store will not accept a `chrome-extension://` URL. It needs a public page.
+The policy is [`docs/privacy.html`](privacy.html). The same file is copied into the extension at `ui/privacy.html` and linked from the options page. The store will not accept a `chrome-extension://` URL. It needs a public page. `PRIVACY.md` at the repository root is an earlier draft; the store listing and the extension both use `docs/privacy.html`.
 
 After this file is on the default branch:
 
@@ -158,6 +158,8 @@ The transfers above are the feature the user turned on (their cloud provider, or
 4. Submit for review.
 
 Review takes longer when the package declares `<all_urls>`, even as an optional host permission. That is expected. Do not remove the justification.
+
+The playground sandbox (`ui/tool-sandbox.html`) runs tool code the user or the model wrote. It is a manifest sandbox page with an opaque origin and no extension APIs, and it asks before running. `debugger` is not in the manifest; console capture uses `chrome.scripting`.
 
 If the name "Local LLM" is rejected as already used, change the manifest `name`, rebuild with `npm run pack`, and upload the new zip. The listing name and the manifest name should match.
 
