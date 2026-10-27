@@ -255,9 +255,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     name: "get_console_messages",
     group: "browser",
     confirm: false,
-    needs: { permissions: ["debugger"], origins: ["<all_urls>"] },
+    needs: PAGES,
     description:
-      "Return DevTools-style console messages for a tab (console.log/warn/error, uncaught exceptions). Attaches the Chrome debugger on first use (Chrome shows a debugging banner); only messages after that are available.",
+      "Return console messages from a tab (console.log/warn/error and uncaught exceptions). Capture starts the first time this runs on that tab; earlier messages are not included. Needs the page access the Tools panel requests.",
     inputSchema: obj({
       tabId: TAB_ID,
       level: { type: "string", enum: ["debug", "log", "info", "warn", "error"], description: "Minimum severity to return (default: all)" },
@@ -271,8 +271,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     name: "clear_console_messages",
     group: "browser",
     confirm: false,
-    needs: { permissions: ["debugger"], origins: ["<all_urls>"] },
-    description: "Clear buffered console messages for a tab. Does not detach the debugger.",
+    needs: PAGES,
+    description: "Clear buffered console messages for a tab. Capture starts the first time get_console_messages runs on that tab.",
     inputSchema: obj({ tabId: TAB_ID }),
     run: consoleTools.clear_console_messages,
   },

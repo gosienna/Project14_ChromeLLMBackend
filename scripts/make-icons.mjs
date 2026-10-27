@@ -21,19 +21,22 @@ const chunk = (type, data) => {
   return Buffer.concat([len, td, c]);
 };
 
-function icon(size) {
+function icon(size, pad = 0) {
   const px = Buffer.alloc(size * (size * 4 + 1));
-  const r = size * 0.22;
+  const art = size - pad * 2;
+  const r = art * 0.22;
   for (let y = 0; y < size; y++) {
     px[y * (size * 4 + 1)] = 0;
     for (let x = 0; x < size; x++) {
       const i = y * (size * 4 + 1) + 1 + x * 4;
-      // rounded square
-      const dx = Math.max(r - x - 0.5, x + 0.5 - (size - r), 0);
-      const dy = Math.max(r - y - 0.5, y + 0.5 - (size - r), 0);
-      const inside = Math.hypot(dx, dy) <= r;
-      // three "chip" bars
-      const u = x / size, v = y / size;
+      const lx = x - pad;
+      const ly = y - pad;
+      const inArt = lx >= 0 && ly >= 0 && lx < art && ly < art;
+      // rounded square, inset so the 128px store icon has the padding Chrome asks for
+      const dx = Math.max(r - lx - 0.5, lx + 0.5 - (art - r), 0);
+      const dy = Math.max(r - ly - 0.5, ly + 0.5 - (art - r), 0);
+      const inside = inArt && Math.hypot(dx, dy) <= r;
+      const u = lx / art, v = ly / art;
       const bar = u > 0.24 && u < 0.76 && [0.28, 0.46, 0.64].some((t) => v > t && v < t + 0.1) && !(v > 0.64 && u > 0.56);
       const [R, G, B] = bar ? [255, 255, 255] : [59, 91, 219];
       px[i] = R; px[i + 1] = G; px[i + 2] = B; px[i + 3] = inside ? 255 : 0;
@@ -47,5 +50,8 @@ function icon(size) {
 }
 
 mkdirSync("src/icons", { recursive: true });
-for (const s of [16, 32, 48, 128]) writeFileSync(`src/icons/${s}.png`, icon(s));
+// Toolbar sizes stay full-bleed. The 128px icon is also the store icon: Chrome wants
+// the artwork at 96px with 16px of transparent padding on each side.
+for (const s of [16, 32, 48]) writeFileSync(`src/icons/${s}.png`, icon(s));
+writeFileSync("src/icons/128.png", icon(128, 16));
 console.log("icons written to src/icons/");

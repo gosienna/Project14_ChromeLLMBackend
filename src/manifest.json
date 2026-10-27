@@ -9,7 +9,7 @@
     "type": "module"
   },
   "permissions": ["offscreen", "storage", "scripting", "unlimitedStorage"],
-  "optional_permissions": ["downloads", "debugger"],
+  "optional_permissions": ["downloads"],
   "host_permissions": [],
   "optional_host_permissions": [
     "<all_urls>",

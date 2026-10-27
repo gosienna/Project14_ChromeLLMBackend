@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:e2e": "node scripts/build.mjs --test && playwright test",
     "fetch:webllm-libs": "node scripts/fetch-webllm-libs.mjs",
+    "pack": "node scripts/pack.mjs",
     "demo": "http-server demo -p 8787 -c-1"
   },
   "devDependencies": {
