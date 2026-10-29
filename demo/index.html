@@ -24,7 +24,7 @@
 <body>
 <main>
   <h1>Prompt API conformance</h1>
-  <p class="muted">Runs the same checks against whatever provides <code>window.LanguageModel</code> on this page: Chrome's native model or the Local LLM extension. Enable this site in the extension first.</p>
+  <p class="muted">Runs the same checks against whatever provides <code>window.LanguageModel</code> on this page: Chrome's native model or the Agent Browser ToolKit extension. Enable this site in the extension first.</p>
   <p id="source">Detecting…</p>
   <div class="wrap" id="models" hidden><table><thead><tr><th>Model (<code>localLLM.models()</code>)</th><th>Backend</th><th>Input → output</th><th>Context</th><th>Price in / out per 1M</th></tr></thead><tbody id="model-rows"></tbody></table></div>
   <button id="run" disabled>Run checks</button>
@@ -43,7 +43,7 @@
     }
     if (window.localLLM) {
       const info = await window.localLLM.info().catch(() => null);
-      source.textContent = `Provider: Local LLM extension ${info ? `— ${info.name} on ${info.backend} (v${info.version})` : ""}`;
+      source.textContent = `Provider: Agent Browser ToolKit extension ${info ? `— ${info.name} on ${info.backend} (v${info.version})` : ""}`;
       showModels(await window.localLLM.models?.().catch(() => []) ?? []);
     } else {
       source.textContent = "Provider: Chrome native Prompt API";

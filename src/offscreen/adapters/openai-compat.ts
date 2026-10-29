@@ -29,7 +29,7 @@ export const openAICompatAdapter: Adapter = (cfg, messages, opts, signal, fetchI
   guard(signal, (async function* (): AsyncGenerator<string, GenerateResult> {
     const headers: Record<string, string> = {};
     if (cfg.apiKey) headers.authorization = `Bearer ${cfg.apiKey}`;
-    if (cfg.provider.id === "openrouter") headers["X-Title"] = "Local LLM Extension";
+    if (cfg.provider.id === "openrouter") headers["X-Title"] = "Agent Browser ToolKit Extension";
     const res = await post(
       fetchImpl,
       `${cfg.provider.baseUrl}/chat/completions`,

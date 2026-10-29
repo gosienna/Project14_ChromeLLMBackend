@@ -104,7 +104,7 @@ async function shootPromo(page, width, height, path) {
     </style></head>
     <body>
       <div class="mark"><i></i><i></i><i></i></div>
-      <div><h1>Local LLM</h1><p>An on-device model for the sites you approve.</p></div>
+      <div><h1>Agent Browser ToolKit</h1><p>An on-device model for the sites you approve.</p></div>
     </body></html>`, { waitUntil: "domcontentloaded" });
   await page.screenshot({ path });
 }

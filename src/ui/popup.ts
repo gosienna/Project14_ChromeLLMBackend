@@ -22,7 +22,7 @@ async function main() {
   const status = total ? await send<HostStatus>({ type: "admin", admin: { op: "status" } }).catch(() => null) : null;
   const running = Object.values(status?.running ?? {}).reduce((a, b) => a + b, 0);
 
-  app.append(h("h1", {}, "Local LLM"), h("p", { class: "muted small" }, `${total} active session${total === 1 ? "" : "s"}`));
+  app.append(h("h1", {}, "Agent Browser ToolKit"), h("p", { class: "muted small" }, `${total} active session${total === 1 ? "" : "s"}`));
   if (running) {
     // One stuck generation holds up every local request behind it; this stops them all.
     app.append(h("div", { class: "row" },

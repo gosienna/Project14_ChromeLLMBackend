@@ -59,7 +59,7 @@ test("prompt API round trip through the relay chain", async ({ context, sw }) =>
 test("localLLM.models lists what the site can run and create() picks one", async ({ context, sw }) => {
   // Two custom endpoints on localhost (granted in the test build); the site may use only one.
   await sw.evaluate(async () => {
-    const { settings } = await chrome.storage.local.get("settings");
+    const { settings } = (await chrome.storage.local.get("settings")) as { settings: Record<string, unknown> };
     const custom = (id: string, model: string) => ({ id, name: id, adapter: "openai-compat", baseUrl: "http://localhost:8790/v1", defaultModel: model, hostPattern: "http://localhost/*", keyRequired: false });
     await chrome.storage.local.set({ settings: { ...settings, customProviders: [custom("custom-a", "model-a"), custom("custom-b", "model-b")] } });
   });

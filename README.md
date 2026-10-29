@@ -1,4 +1,4 @@
-# Local LLM — Chrome extension
+# Agent Browser ToolKit — Chrome extension
 
 An MV3 Chrome extension that serves a language model — running locally in the browser, or through the user's own cloud API keys — to websites the user approves, via a Prompt API–compatible `window.LanguageModel`. Web apps code against the standard API once; the extension supplies the model, loaded a single time and shared across every tab and site.
 
@@ -453,7 +453,7 @@ A chat box with streaming, a stop button, download progress and fallback, in pla
 
   async function getSession() {
     if (session) return session;
-    if (!("LanguageModel" in window)) throw new Error("Enable the Local LLM extension on this site.");
+    if (!("LanguageModel" in window)) throw new Error("Enable the Agent Browser ToolKit extension on this site.");
     if ((await LanguageModel.availability()) === "unavailable") throw new Error("No model available.");
     session = await LanguageModel.create({
       initialPrompts: [{ role: "system", content: "You are a helpful, concise assistant." }],
