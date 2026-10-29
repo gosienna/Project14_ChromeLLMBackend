@@ -1,7 +1,7 @@
 {
   "name": "@local-llm/web",
   "version": "0.1.0",
-  "description": "Detect the Local LLM extension (or Chrome's native Prompt API) and fall back gracefully",
+  "description": "Detect the Agent Browser ToolKit extension (or Chrome's native Prompt API) and fall back gracefully",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

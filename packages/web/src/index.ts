@@ -1,5 +1,5 @@
 // @local-llm/web: find a Prompt API implementation — Chrome's native LanguageModel or the
-// Local LLM extension's — and fall back gracefully when neither is present.
+// Agent Browser ToolKit extension's — and fall back gracefully when neither is present.
 //
 //   import { getLanguageModel } from "@local-llm/web";
 //   const lm = await getLanguageModel();

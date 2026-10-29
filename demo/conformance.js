@@ -1,5 +1,5 @@
 // Prompt API conformance checks. The same suite runs against Chrome's native LanguageModel
-// and the Local LLM extension; results should match in shape and error names.
+// and the Agent Browser ToolKit extension; results should match in shape and error names.
 
 const expectName = async (fn, name) => {
   try {

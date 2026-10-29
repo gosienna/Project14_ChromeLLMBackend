@@ -560,7 +560,7 @@ async function render() {
   const parts = await Promise.all([sitesSection(), localSection(), cloudSection(), toolsSection(), Promise.resolve(limitsSection()), usageSection()]);
   app.replaceChildren(
     h("header", {},
-      h("h1", {}, "Local LLM"),
+      h("h1", {}, "Agent Browser ToolKit"),
       h("p", { class: "muted" }, "Serves a language model to the websites you approve through the standard window.LanguageModel API."),
       h("nav", {},
         ...[["sites", "Sites"], ["local", "Local model"], ["cloud", "Cloud providers"], ["tools", "Tools"], ["limits", "Limits"], ["usage", "Usage"]].map(([id, t]) => h("a", { href: `#${id}` }, t)),

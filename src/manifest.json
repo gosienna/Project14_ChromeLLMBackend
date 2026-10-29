@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Local LLM",
+  "name": "Agent Browser ToolKit",
   "version": "0.1.0",
   "description": "Provides an on-device language model to websites the user approves.",
   "minimum_chrome_version": "116",
@@ -25,7 +25,7 @@
     "https://www.google.com/*"
   ],
   "action": {
-    "default_title": "Local LLM",
+    "default_title": "Agent Browser ToolKit",
     "default_popup": "ui/popup.html",
     "default_icon": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" }
   },

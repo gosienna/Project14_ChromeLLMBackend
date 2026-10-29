@@ -1,8 +1,8 @@
-# Local LLM — Privacy Policy
+# Agent Browser ToolKit — Privacy Policy
 
 _Last updated: 27 October 2026_
 
-Local LLM ("the extension") is a Chrome extension that gives websites you approve access to a language model through the `window.LanguageModel` API. This policy explains what data the extension handles and where it goes.
+Agent Browser ToolKit ("the extension") is a Chrome extension that gives websites you approve access to a language model through the `window.LanguageModel` API. This policy explains what data the extension handles and where it goes.
 
 ## Summary
 
