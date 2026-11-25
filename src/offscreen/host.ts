@@ -3,7 +3,7 @@
 // to the service worker by request id. Shared by every tab and site.
 
 import { toWireError, LLMError } from "../shared/errors";
-import type { AdminOp, BackendSpec, FromHost, HostRequest, HostStatus, ToHost } from "../shared/host-protocol";
+import type { AdminOp, BackendSpec, FromHost, HostRequest, HostStatus, HostWebUiResponse, ToHost } from "../shared/host-protocol";
 import { randomId, type ChatMessage, type DistributiveOmit, type PageResponse, type SessionInfo, type ToolCall, type ToolDecl, type Usage } from "../shared/protocol";
 import type { Backend } from "./backend";
 import { CloudBackend } from "./cloud-backend";
@@ -14,6 +14,7 @@ import { installLargeFetch } from "./large-fetch";
 import { sanitizeTrace } from "./trace";
 import type { TavilyOutcome } from "../shared/search";
 import { receivedCap } from "../shared/settings";
+import { setWebUiRunner, WebUiBackend } from "./webui-backend";
 
 // Before any engine fetch: GGUFs over 2 GiB (MedGemma 27B) are downloaded in ranges.
 installLargeFetch();
@@ -75,9 +76,59 @@ setInterval(() => {
 }, 20_000);
 
 function makeBackend(spec: BackendSpec, req: HostRequest): Backend {
-  return spec.kind === "local"
-    ? new LocalBackend(runtime, spec.model, spec.engine, req.idleUnloadMinutes, req.limits.maxContext, spec.reasoning)
-    : new CloudBackend(spec);
+  if (spec.kind === "local") {
+    return new LocalBackend(runtime, spec.model, spec.engine, req.idleUnloadMinutes, req.limits.maxContext, spec.reasoning);
+  }
+  if (spec.kind === "webui") return new WebUiBackend(spec);
+  return new CloudBackend(spec);
+}
+
+/** Pending webui-res waiters keyed by request id. */
+const webuiWaiters = new Map<
+  string,
+  {
+    onDelta: (text: string) => void;
+    resolve: (r: { text: string; inputTokens: number; outputTokens: number }) => void;
+    reject: (e: unknown) => void;
+  }
+>();
+
+let webuiCounter = 0;
+
+setWebUiRunner((providerId, prompt, signal, onDelta) => {
+  const rid = `webui-${++webuiCounter}-${Date.now()}`;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      webuiWaiters.delete(rid);
+      reject(new LLMError("AbortError", "The operation was aborted"));
+    };
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    webuiWaiters.set(rid, {
+      onDelta,
+      resolve: (r) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(r);
+      },
+      reject: (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    });
+    post({ type: "webui-req", rid, providerId, prompt });
+  });
+});
+
+function handleWebUiRes(msg: HostWebUiResponse) {
+  const w = webuiWaiters.get(msg.rid);
+  if (!w) return;
+  if (msg.event === "delta") {
+    if (msg.text !== undefined) w.onDelta(msg.text);
+    return;
+  }
+  webuiWaiters.delete(msg.rid);
+  if (msg.event === "error") w.reject(new LLMError("NetworkError", msg.error ?? "Web chat failed"));
+  else w.resolve({ text: msg.text ?? "", inputTokens: msg.inputTokens ?? 0, outputTokens: msg.outputTokens ?? 0 });
 }
 
 async function pickBackend(req: HostRequest): Promise<{ id: string; backend: Backend } | null> {
@@ -456,6 +507,8 @@ chrome.runtime.onConnect.addListener((p) => {
         (value) => post({ type: "admin-res", rid: msg.rid, ok: true, value }),
         (e) => post({ type: "admin-res", rid: msg.rid, ok: false, error: String(e?.message ?? e) }),
       );
+    } else if (msg.type === "webui-res") {
+      handleWebUiRes(msg);
     }
   });
   p.onDisconnect.addListener(() => {

@@ -2,6 +2,7 @@
 
 import type { EngineId } from "./catalog";
 import { BUILTIN_PROVIDERS, type ProviderDef } from "./providers";
+import { WEBUI_PROVIDERS, findWebUiProvider, isWebUiProviderId } from "./webui-providers";
 
 /** "local" or a provider id. */
 export type BackendId = string;
@@ -64,9 +65,10 @@ export interface UsageEntry {
 export const DEFAULT_SETTINGS: Settings = {
   overrideNative: false,
   local: { modelId: "qwen2.5-0.5b-instruct", enginePin: {}, reasoning: true },
-  providers: Object.fromEntries(
-    BUILTIN_PROVIDERS.map((p) => [p.id, { enabled: false, model: p.defaultModel, monthlyTokenCap: 2_000_000 }]),
-  ),
+  providers: Object.fromEntries([
+    ...BUILTIN_PROVIDERS.map((p) => [p.id, { enabled: false, model: p.defaultModel, monthlyTokenCap: 2_000_000 }]),
+    ...WEBUI_PROVIDERS.map((p) => [p.id, { enabled: false, model: p.defaultModel, monthlyTokenCap: 2_000_000 }]),
+  ]),
   customProviders: [],
   idleUnloadMinutes: 10,
   limits: { maxSessions: 2, tokensPerMinute: 20_000, maxContext: 8192, maxContextUnlimited: false, maxOutputTokens: 16384, maxOutputUnlimited: false },
@@ -169,6 +171,23 @@ export function allProviders(settings: Settings): ProviderDef[] {
 export function findProvider(settings: Settings, id: string): ProviderDef | undefined {
   return allProviders(settings).find((p) => p.id === id);
 }
+
+/** Display name for any backend id: local, API cloud, custom, or web-chat. */
+export function backendDisplayName(id: string, settings: Settings): string {
+  if (id === "local") return "Local model";
+  return findProvider(settings, id)?.name ?? findWebUiProvider(id)?.name ?? id;
+}
+
+/** Backend ids the Sites UI may offer: enabled API/web-chat providers plus local. */
+export function enabledBackendIds(settings: Settings): string[] {
+  const cloud = allProviders(settings)
+    .filter((p) => settings.providers[p.id]?.enabled || !p.keyRequired)
+    .map((p) => p.id);
+  const webui = WEBUI_PROVIDERS.filter((p) => settings.providers[p.id]?.enabled).map((p) => p.id);
+  return ["local", ...cloud, ...webui];
+}
+
+export { isWebUiProviderId, findWebUiProvider, WEBUI_PROVIDERS };
 
 /** Origin pattern used for chrome.permissions and registerContentScripts. */
 export function originPattern(origin: string): string {

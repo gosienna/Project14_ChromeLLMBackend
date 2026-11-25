@@ -37,6 +37,12 @@ Tracks `docs/BUILD_PLAN.md`. Legend: **done** = implemented and covered by unit 
 - Curated model list per provider (`shared/cloud-models.ts`, prices as of 2026-10-20): options model picker and per-provider Models tables (input → output, context, reasoning, tools, list price); `CloudBackend` takes context window, image input and tool mode from it (unlisted ids keep 128K / images / native); usage log records the cloud model and prices it; retired default ids (`grok-3-mini`, `deepseek-chat`, `deepseek-reasoner`) migrate on load. Reasoning is informational: adapters don't send thinking/effort parameters yet
 - Not yet verified against live provider APIs.
 
+## Web chat backends — built, stubbed e2e
+
+- Optional backends `chatgpt-web`, `gemini-web`, `claude-web`: service worker opens a minimized tab to the provider's site (user's logged-in Chrome session), pastes the flattened prompt, polls the DOM for the assistant reply, closes the window (same pattern as the Google search fallback)
+- Host keeps sessions; `WebUiBackend` RPCs the worker over the host port (`webui-req` / `webui-res`). Text only, no tools/images in v1. Options → Web chat enables each provider (optional host permission on click); Sites must allow the backend. Consent warns that prompts are typed into the web UI
+- Unit: prompt flatten + driver fixtures. E2E: `__test.setWebUiStub` round trip (no real provider tabs). Not yet verified against live ChatGPT / Gemini / Claude DOMs.
+
 ## Playground — done (echo engine); image input unit-tested per adapter
 
 - `ui/playground.html`, opened from the popup (**Open playground**) or the options nav: a chat with the local model or any enabled provider, with streaming, Stop, New chat, an optional system prompt and temperature

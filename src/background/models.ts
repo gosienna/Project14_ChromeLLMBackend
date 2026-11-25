@@ -7,6 +7,7 @@ import { PRICES_AS_OF, UNLISTED_CONTEXT, cloudModels, type CloudModel } from "..
 import type { ModelInfo } from "../shared/protocol";
 import type { ProviderDef } from "../shared/providers";
 import { effectiveMaxContext, effectiveMaxOutput, type Settings, type SiteConfig } from "../shared/settings";
+import type { WebUiProviderDef } from "../shared/webui-providers";
 
 export interface ModelListInput {
   settings: Settings;
@@ -15,6 +16,8 @@ export interface ModelListInput {
   host: { caps: DeviceCaps; downloaded: string[]; nano: boolean } | null;
   /** Providers from the site's allowed backends that are enabled, have a key and host permission. */
   providers: ProviderDef[];
+  /** Web-chat backends that are enabled and have host permission. */
+  webuiProviders?: WebUiProviderDef[];
 }
 
 /** The local model the router uses when the setting names no catalog model. */
@@ -101,10 +104,32 @@ function providerModels(provider: ProviderDef, { settings, site }: ModelListInpu
   return [...unlisted, ...curated].map((m) => cloudEntry(provider, m, site.backend === provider.id && m.id === configured, settings));
 }
 
+function webuiModels(provider: WebUiProviderDef, { settings, site }: ModelListInput): ModelInfo[] {
+  const configured = settings.providers[provider.id]?.model || provider.defaultModel;
+  const inputQuota = Math.min(provider.contextWindow, effectiveMaxContext(settings.limits));
+  return [
+    {
+      id: `${provider.id}:${configured}`,
+      name: provider.name,
+      backend: provider.id,
+      provider: provider.name,
+      default: site.backend === provider.id,
+      input: ["text"],
+      output: ["text"],
+      contextWindow: provider.contextWindow,
+      inputQuota,
+      maxOutputTokens: Math.min(effectiveMaxOutput(settings.limits), inputQuota),
+      tools: "prompted",
+      price: { input: 0, output: 0 },
+    },
+  ];
+}
+
 /** Runnable models for the site, its default first, then in the order of its allowed backends. */
 export function listModels(input: ModelListInput): ModelInfo[] {
   const byBackend = new Map<string, ModelInfo[]>([["local", localModels(input)]]);
   for (const p of input.providers) byBackend.set(p.id, providerModels(p, input));
+  for (const p of input.webuiProviders ?? []) byBackend.set(p.id, webuiModels(p, input));
   const list = input.site.allowedBackends.flatMap((b) => byBackend.get(b) ?? []);
   return [...list.filter((m) => m.default), ...list.filter((m) => !m.default)];
 }

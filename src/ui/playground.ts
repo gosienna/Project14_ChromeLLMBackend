@@ -22,7 +22,7 @@ import {
   type SessionInfo,
   type ToolDecl,
 } from "../shared/protocol";
-import { allProviders, getSettings } from "../shared/settings";
+import { allProviders, getSettings, WEBUI_PROVIDERS } from "../shared/settings";
 import { h, send as uiSend } from "./dom";
 import { renderMarkdown } from "./markdown";
 import { hydrateImages, revokeImages } from "./remote-image";
@@ -200,6 +200,10 @@ async function loadBackends() {
     const cfg = settings.providers[p.id];
     const id = cfg?.model || p.defaultModel;
     if (cfg?.enabled) options.push([p.id, `${p.name} · ${findCloudModel(p.id, id)?.name ?? id}`]);
+  }
+  for (const p of WEBUI_PROVIDERS) {
+    const cfg = settings.providers[p.id];
+    if (cfg?.enabled) options.push([p.id, `${p.name} · web`]);
   }
   let saved: string | null = null;
   try {
