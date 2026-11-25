@@ -8,7 +8,9 @@ import { deleteKey, disableLock, enableLock, keystoreStatus, lock, setKey, unloc
 import { BUILTIN_PROVIDERS, customProvider } from "../shared/providers";
 import {
   allProviders,
+  backendDisplayName,
   effectiveMaxContext,
+  enabledBackendIds,
   getSettings,
   getSites,
   getUsage,
@@ -16,6 +18,7 @@ import {
   originPattern,
   saveSettings,
   updateSite,
+  WEBUI_PROVIDERS,
   type Settings,
   type SiteConfig,
 } from "../shared/settings";
@@ -41,9 +44,8 @@ const toast = (el: HTMLElement, text: string) => {
 
 async function sitesSection(): Promise<HTMLElement> {
   const sites = await getSites();
-  const providers = allProviders(settings);
-  const backendLabel = (id: string) => (id === "local" ? "Local model" : providers.find((p) => p.id === id)?.name ?? id);
-  const enabledBackends = ["local", ...providers.filter((p) => settings.providers[p.id]?.enabled || !p.keyRequired).map((p) => p.id)];
+  const backendLabel = (id: string) => backendDisplayName(id, settings);
+  const enabledBackends = enabledBackendIds(settings);
 
   const input = h("input", { placeholder: "app.example.com", size: 32 });
   const msg = h("span", { class: "small muted" });
@@ -400,6 +402,38 @@ async function cloudSection(): Promise<HTMLElement> {
 const TAVILY = "https://api.tavily.com/*";
 const GOOGLE = "https://www.google.com/*";
 
+async function webuiSection(): Promise<HTMLElement> {
+  const rows = WEBUI_PROVIDERS.map((p) => {
+    const cfg = settings.providers[p.id] ?? { enabled: false, model: p.defaultModel, monthlyTokenCap: 2_000_000 };
+    return h("tr", {},
+      h("td", {}, h("strong", {}, p.name), h("div", { class: "small muted" }, p.startUrl)),
+      h("td", {}, h("input", {
+        type: "checkbox", checked: cfg.enabled,
+        onchange: async (e) => {
+          const box = e.target as HTMLInputElement;
+          if (box.checked && !(await chrome.permissions.request({ origins: [p.hostPattern] }))) {
+            box.checked = false;
+            return;
+          }
+          await save((s) => (s.providers[p.id] = { ...cfg, enabled: box.checked }));
+        },
+      })),
+      h("td", {}, h("input", {
+        type: "number", min: 0, step: 100000, value: cfg.monthlyTokenCap,
+        onchange: (e) => save((s) => (s.providers[p.id] = { ...cfg, monthlyTokenCap: Number((e.target as HTMLInputElement).value) })),
+      })),
+    );
+  });
+  return section("webui", "Web chat",
+    h("p", { class: "small muted" },
+      "Uses your existing Chrome login on ChatGPT, Gemini, or Claude: the extension opens a minimized tab, pastes the prompt, and reads the reply. ",
+      "No API key. A site uses a web chat backend only if you allow it for that site. DOM layouts change; if a provider breaks, re-open the site once while signed in."),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ...["Provider", "Enabled", "Monthly token cap"].map((t) => h("th", {}, t)))),
+      h("tbody", {}, ...rows))),
+  );
+}
+
 async function toolsSection(): Promise<HTMLElement> {
   const ks = await keystoreStatus();
   const saved = ks.providers.includes("tavily");
@@ -557,13 +591,21 @@ async function usageSection(): Promise<HTMLElement> {
 
 async function render() {
   settings = await getSettings();
-  const parts = await Promise.all([sitesSection(), localSection(), cloudSection(), toolsSection(), Promise.resolve(limitsSection()), usageSection()]);
+  const parts = await Promise.all([
+    sitesSection(),
+    localSection(),
+    cloudSection(),
+    webuiSection(),
+    toolsSection(),
+    Promise.resolve(limitsSection()),
+    usageSection(),
+  ]);
   app.replaceChildren(
     h("header", {},
       h("h1", {}, "Agent Browser ToolKit"),
       h("p", { class: "muted" }, "Serves a language model to the websites you approve through the standard window.LanguageModel API."),
       h("nav", {},
-        ...[["sites", "Sites"], ["local", "Local model"], ["cloud", "Cloud providers"], ["tools", "Tools"], ["limits", "Limits"], ["usage", "Usage"]].map(([id, t]) => h("a", { href: `#${id}` }, t)),
+        ...[["sites", "Sites"], ["local", "Local model"], ["cloud", "Cloud providers"], ["webui", "Web chat"], ["tools", "Tools"], ["limits", "Limits"], ["usage", "Usage"]].map(([id, t]) => h("a", { href: `#${id}` }, t)),
         h("a", { href: "playground.html" }, "Playground →"),
         h("a", { href: "privacy.html" }, "Privacy"))),
     ...parts,

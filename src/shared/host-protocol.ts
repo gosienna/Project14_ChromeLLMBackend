@@ -7,7 +7,9 @@ import type { ProviderDef } from "./providers";
 
 export type BackendSpec =
   | { kind: "local"; model: CatalogModel; engine: EngineId | "auto"; reasoning: boolean }
-  | { kind: "cloud"; provider: ProviderDef; model: string; apiKey: string };
+  | { kind: "cloud"; provider: ProviderDef; model: string; apiKey: string }
+  /** Open the provider's web chat UI in a minimized tab (user's logged-in session). */
+  | { kind: "webui"; providerId: string; name: string; model: string; contextWindow: number };
 
 export interface HostRequest {
   type: "req";
@@ -93,5 +95,24 @@ export interface HostKeepAlive {
   type: "keepalive";
 }
 
-export type FromHost = HostResponse | HostAdminResponse | HostProgress | HostSessionsChanged | HostKeepAlive;
-export type ToHost = HostRequest | HostAdminRequest;
+/** Host asks the service worker to drive a web-chat tab (needs chrome.tabs / scripting). */
+export interface HostWebUiRequest {
+  type: "webui-req";
+  rid: string;
+  providerId: string;
+  prompt: string;
+}
+
+/** Service worker streams web-chat progress back to the host. */
+export interface HostWebUiResponse {
+  type: "webui-res";
+  rid: string;
+  event: "delta" | "done" | "error";
+  text?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  error?: string;
+}
+
+export type FromHost = HostResponse | HostAdminResponse | HostProgress | HostSessionsChanged | HostKeepAlive | HostWebUiRequest;
+export type ToHost = HostRequest | HostAdminRequest | HostWebUiResponse;

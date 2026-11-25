@@ -40,7 +40,7 @@ export type ToolMode = "native" | "prompted";
 export interface Backend {
   /** Backend id for the usage log: "local" or a provider id. */
   readonly id: string;
-  readonly kind: "local" | "cloud";
+  readonly kind: "local" | "cloud" | "webui";
   /** Model and engine/provider names reported by window.localLLM.info(). */
   describe(): { name: string; backend: string };
   availability(): Promise<Availability>;

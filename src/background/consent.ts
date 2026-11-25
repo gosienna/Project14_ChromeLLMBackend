@@ -14,6 +14,8 @@ export interface ConsentRequest {
   backend: string;
   backendName: string;
   cloud: boolean;
+  /** Prompts are typed into a logged-in web chat tab (ChatGPT / Gemini / Claude). */
+  webui?: boolean;
 }
 
 interface Pending extends ConsentRequest {
@@ -63,7 +65,15 @@ export function askConsent(req: Omit<ConsentRequest, "id">): Promise<Decision> {
 
 export function getConsentRequest(id: string): ConsentRequest | undefined {
   const p = pending.get(id);
-  return p && { id: p.id, origin: p.origin, tabId: p.tabId, backend: p.backend, backendName: p.backendName, cloud: p.cloud };
+  return p && {
+    id: p.id,
+    origin: p.origin,
+    tabId: p.tabId,
+    backend: p.backend,
+    backendName: p.backendName,
+    cloud: p.cloud,
+    ...(p.webui ? { webui: true } : {}),
+  };
 }
 
 /** Record the user's decision and release waiting create() calls. */

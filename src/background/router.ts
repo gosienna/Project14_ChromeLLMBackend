@@ -25,9 +25,11 @@ import {
   effectiveMaxContext,
   effectiveMaxOutput,
   findProvider,
+  findWebUiProvider,
   getSettings,
   getSite,
   getUsage,
+  isWebUiProviderId,
   originPattern,
   updateSite,
   type Settings,
@@ -45,6 +47,8 @@ import { TokenRateLimiter, exceedsDailyTokenCap, idleCloseIn, providerTokensThis
 import { configuredLocalModel, listModels, parseModelId } from "./models";
 import { consentAvailability, deliversTo, gate } from "./policy";
 import { isPermitted, syncRegistrations } from "./registration";
+import { setWebUiStub as installWebUiStub, webuiGenerate, webuiPermitted } from "./webui-llm";
+import type { WebUiProviderDef } from "../shared/webui-providers";
 
 declare const __TEST__: boolean;
 
@@ -188,6 +192,21 @@ async function backendSpec(id: string, settings: Settings): Promise<BackendSpec>
     const model = configuredLocalModel(settings);
     return { kind: "local", model, engine: settings.local.enginePin[model.id] ?? "auto", reasoning: settings.local.reasoning };
   }
+  if (isWebUiProviderId(id)) {
+    const provider = findWebUiProvider(id)!;
+    const cfg = settings.providers[id];
+    if (!cfg?.enabled) throw new LLMError("NotAllowedError", `${provider.name} is not enabled`);
+    if (!(await webuiPermitted(id))) {
+      throw new LLMError("NotAllowedError", `Host permission for ${provider.name} has not been granted`);
+    }
+    return {
+      kind: "webui",
+      providerId: provider.id,
+      name: provider.name,
+      model: cfg.model || provider.defaultModel,
+      contextWindow: provider.contextWindow,
+    };
+  }
   const provider = findProvider(settings, id);
   const cfg = settings.providers[id];
   if (!provider) throw new LLMError("NotSupportedError", `Unknown backend ${id}`);
@@ -221,16 +240,21 @@ async function backendChain(site: SiteConfig, settings: Settings): Promise<Array
 async function siteModels(site: SiteConfig, settings: Settings): Promise<ModelInfo[]> {
   const host = site.allowedBackends.includes("local") ? ((await admin({ op: "status" }).catch(() => null)) as HostStatus | null) : null;
   const providers = [];
+  const webuiProviders: WebUiProviderDef[] = [];
   for (const id of site.allowedBackends) {
     if (id === "local") continue;
     try {
       const spec = await backendSpec(id, settings);
       if (spec.kind === "cloud") providers.push(spec.provider);
+      if (spec.kind === "webui") {
+        const p = findWebUiProvider(id);
+        if (p) webuiProviders.push(p);
+      }
     } catch {
       /* not enabled, no key or no permission: not runnable */
     }
   }
-  return listModels({ settings, site, host, providers });
+  return listModels({ settings, site, host, providers, webuiProviders });
 }
 
 /** The backend for create({ model }): only an id from the site's own list, and no fallback. */
@@ -248,7 +272,7 @@ async function chosenBackend(id: string, site: SiteConfig, settings: Settings): 
 
 function backendName(id: string, settings: Settings): string {
   if (id === "local") return findModel(settings.local.modelId)?.name ?? "local model";
-  return findProvider(settings, id)?.name ?? id;
+  return findProvider(settings, id)?.name ?? findWebUiProvider(id)?.name ?? id;
 }
 
 // ---- Request handling -----------------------------------------------------
@@ -330,13 +354,19 @@ async function handlePageRequest(conn: PageConn, req: PageRequest, visible: bool
       const chosen = model !== undefined ? await chosenBackend(model, site!, settings) : null;
       const backends = chosen?.backends ?? (await backendChain(site!, settings));
       if (g.action === "ask") {
-        const cloud = backends[0].spec.kind === "cloud";
+        const kind = backends[0].spec.kind;
+        const cloud = kind === "cloud" || kind === "webui";
         const decision: Decision = await askConsent({
           origin,
           tabId,
           backend: backends[0].id,
-          backendName: !chosen ? backendName(backends[0].id, settings) : cloud ? `${chosen.entry.name} (${chosen.entry.provider})` : chosen.entry.name,
+          backendName: !chosen
+            ? backendName(backends[0].id, settings)
+            : kind !== "local"
+              ? `${chosen.entry.name} (${chosen.entry.provider})`
+              : chosen.entry.name,
           cloud,
+          webui: kind === "webui",
         });
         if (decision === "deny") throw new LLMError("NotAllowedError", "The user denied access to the model");
       }
@@ -474,6 +504,35 @@ onHostMessage((msg: FromHost) => {
     case "sessions":
       updateBadge(msg.sessions);
       return;
+    case "webui-req": {
+      const { rid: webuiRid, providerId, prompt } = msg;
+      webuiGenerate({
+        providerId,
+        prompt,
+        onDelta: (text) => {
+          sendToHost({ type: "webui-res", rid: webuiRid, event: "delta", text }).catch(() => {});
+        },
+      })
+        .then((r) =>
+          sendToHost({
+            type: "webui-res",
+            rid: webuiRid,
+            event: "done",
+            text: r.text,
+            inputTokens: r.inputTokens,
+            outputTokens: r.outputTokens,
+          }),
+        )
+        .catch((e) =>
+          sendToHost({
+            type: "webui-res",
+            rid: webuiRid,
+            event: "error",
+            error: String((e as Error)?.message ?? e),
+          }),
+        );
+      return;
+    }
   }
 });
 
@@ -627,6 +686,10 @@ if (__TEST__) {
       searchDeps.tavilyKey = async () => null;
       searchDeps.googlePermitted = async () => true;
       searchDeps.google = async (_q, n, withImages) => ({ results: results.slice(0, n), ...(withImages ? { images: images.slice(0, n) } : {}) });
+    },
+    /** Replace the web-chat tab runner so e2e never opens ChatGPT/Gemini/Claude. */
+    setWebUiStub(reply: string | ((prompt: string, providerId: string) => string)) {
+      installWebUiStub(typeof reply === "function" ? reply : () => reply);
     },
   };
 }
